@@ -34,23 +34,29 @@ def normalize_image_min(image_data):
     return normalized_data
 
 # Função para processar uma única imagem
-def process_image(img_path, template, mask):
+def process_image(img_path, template, mask, orient):
     try:
+        #logger.info(f"IMAGE_TO_READ {img_path}")
         # Carrega a imagem
-        image = ants.image_read(img_path)
+        image = ants.image_read(img_path, reorient=orient)
+        #logger.info(f"IMAGE_READ")
 
         # Registro (Registration) com as transformações para a imagem e máscara, com intuito de melhorar o corte
         registration = ants.registration(fixed=template, moving=image, type_of_transform='Translation')
         warped_image = registration['warpedmovout']
+        #logger.info(f"TRANSLATION")
 
         registration = ants.registration(fixed=template, moving=warped_image, type_of_transform='Rigid')
         warped_image = registration['warpedmovout']
+        #logger.info(f"RIGID")
 
         registration = ants.registration(fixed=template, moving=warped_image, type_of_transform='Affine')
         warped_image = registration['warpedmovout']
+        #logger.info(f"AFFINE")
 
         registration = ants.registration(fixed=template, moving=warped_image, type_of_transform='SyN')
         warped_image = registration['warpedmovout']
+        #logger.info(f"SYN")
 
         # Máscara do cérebro e extração
         brain_masked = ants.mask_image(warped_image, mask)
@@ -73,6 +79,7 @@ def process_image(img_path, template, mask):
 
         # Bias Field Correction
         image = ants.n4_bias_field_correction(image, shrink_factor=2)
+        #logger.info(f"BIAS")
 
         # Winsorizing
         data = image.numpy()
@@ -89,8 +96,9 @@ def process_image(img_path, template, mask):
         return None
 
 # Função que processa e salva uma imagem
-def process_and_save_image(img_path, template, mask, output_dir):
-    normalized_image = process_image(img_path, template, mask) #processa imagem
+def process_and_save_image(img_path, template, mask, output_dir, orient):
+    logger.info(f"Imagem em processamento: {img_path}")
+    normalized_image = process_image(img_path, template, mask, orient) #processa imagem
     if normalized_image is not None:
         os.makedirs(output_dir, exist_ok=True) #cria o diretório onde será salvo caso não exista
         output_path = os.path.join(output_dir, os.path.basename(img_path)) 
@@ -103,10 +111,12 @@ def process_and_save_image(img_path, template, mask, output_dir):
 # Início do processamento
 if __name__ == "__main__":
     # DIRETÓRIOS
-    DIR_RAW = "ADNI/ADNI_extended/RAW/MP-RAGE"
-    DIR_OUTPUT = os.path.join("ADNI/ADNI_extended/PROCESSED", os.path.basename(DIR_RAW))
+    DIR_BASE = "/mnt/c/Users/Team Taiane/Desktop/OASIS"
+    #DIR_RAW = "ADNI/ADNI_extended/RAW/MP-RAGE"
+    DIR_RAW = f"{DIR_BASE}/OASIS_1_big"
+    DIR_OUTPUT = f"{DIR_BASE}/{os.path.basename(DIR_RAW)}_PROCESSED"
     os.makedirs(DIR_OUTPUT, exist_ok=True)
-    DIR_MASK = "ADNI/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
+    DIR_MASK = "pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
     
     template_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c.nii')
     mask_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c_mask.nii')
@@ -128,7 +138,7 @@ if __name__ == "__main__":
         image_paths = [os.path.join(input_path, file) for file in os.listdir(input_path) if file not in already_processed] #carrega o endereço das imagens não processadas
 
         # Função parcial para passar parâmetros fixos
-        process_func = partial(process_and_save_image, template=template, mask=mask, output_dir=output_path)
+        process_func = partial(process_and_save_image, template=template, mask=mask, output_dir=output_path, orient='SRA')
 
         # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=4) as executor: #max_workers define o número máximo de processos paralelos
