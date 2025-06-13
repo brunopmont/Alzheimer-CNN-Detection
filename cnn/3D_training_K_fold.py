@@ -396,7 +396,7 @@ def create_model_3d(input_shape, n_classes):
     x = layers.Dropout(0.3)(x)
 
     # Camada 4
-    x = layers.Conv3D(16, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01), name='conv3d_4')(x)
+    x = layers.Conv3D(16, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01))(x)
     x = layers.BatchNormalization()(x)
     x = layers.LeakyReLU(negative_slope=0.3)(x)
     x = layers.MaxPooling3D(pool_size=(2, 2, 2), padding='same')(x)
