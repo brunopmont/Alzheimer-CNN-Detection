@@ -18,6 +18,9 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras import mixed_precision
 
+from tensorflow.keras.regularizers import l2
+from tensorflow.keras import layers, models, Input
+
 import matplotlib.pyplot as plt
 import gc
 import seaborn as sns
@@ -322,7 +325,7 @@ def create_pdf(y_paths, y_images, y_true_labels, y_pred_labels, y_pred, output_p
     # Salvar o PDF
     c.save()
 
-def create_model_3d(input_shape, n_classes):
+def create_model_3d_seq(input_shape, n_classes):
     model = Sequential([        
         Input(shape=input_shape),  # Formato de entrada: (1, 145, 182, 155)
 
@@ -366,6 +369,56 @@ def create_model_3d(input_shape, n_classes):
         Dense(n_classes, activation='softmax')
     ])
     
+    return model
+
+def create_model_3d(input_shape, n_classes):
+    inputs = Input(shape=input_shape)  # (D, H, W, C)
+
+    # Camada 1
+    x = layers.Conv3D(2, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01))(inputs)
+    x = layers.BatchNormalization()(x)
+    x = layers.LeakyReLU(negative_slope=0.3)(x)
+    x = layers.MaxPooling3D(pool_size=(2, 2, 2), padding='same')(x)
+    x = layers.Dropout(0.3)(x)
+
+    # Camada 2
+    x = layers.Conv3D(4, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.LeakyReLU(negative_slope=0.3)(x)
+    x = layers.MaxPooling3D(pool_size=(2, 2, 2), padding='same')(x)
+    x = layers.Dropout(0.3)(x)
+
+    # Camada 3
+    x = layers.Conv3D(8, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.LeakyReLU(negative_slope=0.3)(x)
+    x = layers.MaxPooling3D(pool_size=(2, 2, 2), padding='same')(x)
+    x = layers.Dropout(0.3)(x)
+
+    # Camada 4
+    x = layers.Conv3D(16, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01), name='conv3d_4')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.LeakyReLU(negative_slope=0.3)(x)
+    x = layers.MaxPooling3D(pool_size=(2, 2, 2), padding='same')(x)
+    x = layers.Dropout(0.3)(x)
+
+    # Flatten e densas
+    x = layers.Flatten()(x)
+
+    x = layers.Dense(16, kernel_regularizer=l2(0.01))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.3)(x)
+    x = layers.LeakyReLU(negative_slope=0.3)(x)
+
+    x = layers.Dense(8, kernel_regularizer=l2(0.01))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.3)(x)
+    x = layers.LeakyReLU(negative_slope=0.3)(x)
+
+    outputs = layers.Dense(n_classes, activation='softmax')(x)
+
+    model = models.Model(inputs=inputs, outputs=outputs)
+
     return model
 
 def create_model_3d_best(input_shape, n_classes):
