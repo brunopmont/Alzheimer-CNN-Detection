@@ -118,13 +118,19 @@ def load_nifti_data_balanced(base_dir, class_names, target=None):
 
     return images, labels_one_hot, paths, label_encoder.classes_
 
-
 def nifti_data_generator_3d(images_array, labels, batch_size):
     total_n = len(images_array)
     while True:
         for i in range(0, total_n, batch_size):
             final = min(i + batch_size, total_n)
             yield images_array[i:final], labels[i:final]
+            
+def nifti_data_generator_3d_indexed(full_images, full_labels, index_list, batch_size):
+    while True:
+        for i in range(0, len(index_list), batch_size):
+            batch_idx = index_list[i:i+batch_size]
+            yield full_images[batch_idx], full_labels[batch_idx]
+
 
 # Função para carregar imagens NIfTI, seus rótulos e cortar as imagens
 def nifti_data_generator_3d_path(image_paths, labels, batch_size, size):
@@ -196,7 +202,7 @@ def plot_training_history(history, dir):
     #plt.show()
     plt.close('all')
 
-def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names):
+def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names, comp=''):
     # Calcular a matriz de confusão
     cm = confusion_matrix(y_true, y_pred)
 
@@ -205,7 +211,7 @@ def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names):
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names,  annot_kws={"size": 14})
     plt.xlabel('Previsões')
     plt.ylabel('Valores Reais')
-    plt.title('Matriz de Confusão')
+    plt.title(f'Matriz de Confusão{comp}')
     plt.savefig(f'{dir}/{subset}_confusion_matrix.png')
     #plt.show()
     plt.close('all')
@@ -319,13 +325,6 @@ def create_pdf(y_paths, y_images, y_true_labels, y_pred_labels, y_pred, output_p
 def create_model_3d(input_shape, n_classes):
     model = Sequential([        
         Input(shape=input_shape),  # Formato de entrada: (1, 145, 182, 155)
-
-        # Camada 1
-        Conv3D(2, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01)),
-        BatchNormalization(),
-        LeakyReLU(negative_slope=0.3),  
-        MaxPooling3D(pool_size=(2, 2, 2), padding='same'),
-        Dropout(0.3),
 
         # Camada 2
         Conv3D(4, (3, 3, 3), padding='same', kernel_regularizer=l2(0.01)),
@@ -464,7 +463,7 @@ results_dir = os.path.join(results_dir, folder_name)
 os.makedirs(results_dir, exist_ok=True)
 print(f"pasta {folder_name} criada")
 
-epochs = 5
+epochs = 250
 
 new_model_name_ker = (f"binary_classifier_{epochs}_epochs_batch_{batch_size}_{n_classes}_classes.keras")
 
@@ -483,15 +482,13 @@ step = size // 5
 
 tf.keras.backend.clear_session()
 
-# Compila modelo
-model = create_model_3d(shape, n_classes)
-model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss='categorical_crossentropy', metrics=['categorical_accuracy'])
-initial_weights = model.get_weights()
-
 for i in range(0, size, step):
     print(f"\n\nINICIANDO FOLD {count}\n\n")
 
-    model.set_weights(initial_weights)
+    # Compila modelo
+    model = create_model_3d(shape, n_classes)
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss='categorical_crossentropy', metrics=['categorical_accuracy'])
+    # initial_weights = model.get_weights()
 
     final = min(i + step, size)
     results_fold = f"{results_dir}/fold_{count}"
@@ -509,19 +506,31 @@ for i in range(0, size, step):
 
     csv_log = CSVLogger(log_path, append=False)
 
-    print(f"\nCALLBACKS SETADOS\n")
+    #print(f"\nCALLBACKS SETADOS\n")
 
-    val_images = full_images[i:final]
-    val_labels = full_labels[i:final]
-    val_paths = full_paths[i:final]
+    # val_images = full_images[i:final]
+    # val_labels = full_labels[i:final]
+    # val_paths = full_paths[i:final]
 
-    train_images = np.delete(full_images, np.s_[i:final], axis=0)
-    train_labels = np.delete(full_labels, np.s_[i:final], axis=0)
+    # print(f"\nVAL DATA\n")
 
-    val_generator = nifti_data_generator_3d(val_images, val_labels, batch_size)
-    train_generator = nifti_data_generator_3d(train_images, train_labels, batch_size)
+    # train_images = np.delete(full_images, np.s_[i:final], axis=0)
+    # train_labels = np.delete(full_labels, np.s_[i:final], axis=0)
 
-    print(f"\nGERADORES CONFIGURADOS\n")
+    val_idx = np.arange(i, final)
+    train_idx = np.setdiff1d(np.arange(size), val_idx)
+
+    train_idx = shuffle(train_idx, random_state=36)
+    val_idx = shuffle(val_idx, random_state=36)
+
+    val_paths = [full_paths[i] for i in val_idx]
+
+    #print(f"\nTRAIN DATA\n")
+
+    val_generator = nifti_data_generator_3d_indexed(full_images, full_labels, val_idx, batch_size)
+    train_generator = nifti_data_generator_3d_indexed(full_images, full_labels, train_idx, batch_size)
+
+    #print(f"\nGERADORES CONFIGURADOS\n")
 
     print(f"Iniciando treinamento do modelo {new_model_name_ker} para classes {class_names}")
 
@@ -540,22 +549,26 @@ for i in range(0, size, step):
     plot_training_history(history, results_fold)
 
     # Realizar predições para dados do conjunto validação
-    val_true_labels, val_pred_labels, val_pred = get_predictions(val_images, val_labels, batch_size, model)
+    val_true_labels, val_pred_labels, val_pred = get_predictions(full_images[val_idx], full_labels[val_idx], batch_size, model)
 
     # Obter métricas da valiadação e salvá-las em um arquivo
     get_classification_report(val_true_labels, val_pred_labels, results_fold, 'val')
 
     # Obter matriz de confusão
-    plot_confusion_matrix(val_true_labels, val_pred_labels, results_fold, 'val', class_names)
+    plot_confusion_matrix(val_true_labels, val_pred_labels, results_fold, 'val', class_names, f'_fold_{count}')
 
     # Criar pdf com predições
     val_pdf_path = os.path.join(results_fold, "validation_predictions.pdf")
-    create_pdf(val_paths, val_images, val_true_labels, val_pred_labels, val_pred, val_pdf_path, class_names)
+    create_pdf(val_paths, full_images[val_idx], val_true_labels, val_pred_labels, val_pred, val_pdf_path, class_names)
 
     model_checkpoint_callback = None
     csv_log = None
 
-    del history, val_true_labels, val_pred_labels, val_pred, train_images, train_labels, val_images, val_labels, val_paths
+    #print(f"Memória GPU alocada: {tf.config.experimental.get_memory_info('GPU:0')['current']} bytes")
+
+    del history, val_true_labels, val_pred_labels, val_pred, val_paths
     gc.collect()
 
     count += 1
+
+   #print(f"Memória GPU alocada: {tf.config.experimental.get_memory_info('GPU:0')['current']} bytes")
