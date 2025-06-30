@@ -20,7 +20,7 @@ logger = logging.getLogger()
 
 # FUNÇÕES
 # Winsorize -> reduz outliers, limitando os percentis inf e sup
-def winsorize_image(image_data, lower_percentile=1, upper_percentile=99): #reduz valores extremos
+def winsorize_image(image_data, lower_percentile=0, upper_percentile=98): #reduz valores extremos
     lower_bound = np.percentile(image_data, lower_percentile)
     upper_bound = np.percentile(image_data, upper_percentile)
     winsorized_data = np.clip(image_data, lower_bound, upper_bound)
@@ -83,7 +83,7 @@ def process_image(img_path, template, mask, orient):
 
         # Winsorizing
         data = image.numpy()
-        #data = winsorize_image(data, lower_percentile=0, upper_percentile=100)
+        data = winsorize_image(data, lower_percentile=0, upper_percentile=99.9)
 
         # Normalização
         data = normalize_image_min(data)
