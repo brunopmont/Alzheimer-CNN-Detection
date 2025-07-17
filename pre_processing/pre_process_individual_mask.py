@@ -89,8 +89,8 @@ def process_image(img_path, output_dir):
 subsets = ['train', 'validation', 'test']
     
 # DIRETÓRIOS
-DIR_INPUT_BASE = f"/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/to_process/NIFTI_RAW"
-DIR_OUTPUT_BASE = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/to_process/NIFTI_PROCESSED"
+DIR_INPUT_BASE = f"/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/NIFTI_RAW"
+DIR_OUTPUT_BASE = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/NIFTI_PROCESSED"
 os.makedirs(DIR_OUTPUT_BASE, exist_ok=True)
 
 template_path = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c/mni_icbm152_t1_tal_nlin_asym_09c.nii"
