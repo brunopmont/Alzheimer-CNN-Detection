@@ -111,9 +111,9 @@ def process_and_save_image(img_path, template, mask, output_dir, orient):
 # Início do processamento
 if __name__ == "__main__":
     # DIRETÓRIOS
-    DIR_BASE = "/mnt/c/Users/Team Taiane/Desktop/OASIS"
-    #DIR_RAW = "ADNI/ADNI_extended/RAW/MP-RAGE"
-    DIR_RAW = f"{DIR_BASE}/OASIS_1_big"
+    # DIR_BASE = "/mnt/c/Users/Team Taiane/Desktop/OASIS"
+    DIR_BASE = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/OASIS-1"
+    DIR_RAW = f"{DIR_BASE}/OASIS_RAW"
     DIR_OUTPUT = f"{DIR_BASE}/{os.path.basename(DIR_RAW)}_PROCESSED"
     os.makedirs(DIR_OUTPUT, exist_ok=True)
     DIR_MASK = "pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
@@ -127,10 +127,10 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logger.info(f"INICIO DO PROCESSAMENTO")
 
-    for names in os.listdir(DIR_RAW): #itera as subpastas dentre o diretóiro original
+    for name in os.listdir(DIR_RAW): #itera as subpastas dentre o diretóiro original
 
-        input_path = os.path.join(DIR_RAW, names)
-        output_path = os.path.join(DIR_OUTPUT, names)
+        input_path = os.path.join(DIR_RAW, name)
+        output_path = os.path.join(DIR_OUTPUT, name)
         os.makedirs(output_path, exist_ok=True)
 
         # Caminhos das imagens
@@ -138,10 +138,10 @@ if __name__ == "__main__":
         image_paths = [os.path.join(input_path, file) for file in os.listdir(input_path) if file not in already_processed] #carrega o endereço das imagens não processadas
 
         # Função parcial para passar parâmetros fixos
-        process_func = partial(process_and_save_image, template=template, mask=mask, output_dir=output_path, orient='SRA')
+        process_func = partial(process_and_save_image, template=template, mask=mask, output_dir=output_path, orient='IRA')
 
         # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=4) as executor: #max_workers define o número máximo de processos paralelos
+        with ProcessPoolExecutor(max_workers=16) as executor: #max_workers define o número máximo de processos paralelos
             # dependendo do pc, é melhor fazer um por vez, pois paralelizar pode deixar cada processo mais demorado sem hardware que aguente
             futures = [executor.submit(process_func, img_path) for img_path in image_paths]
             
