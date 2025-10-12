@@ -86,52 +86,58 @@ def process_image(img_path, output_dir):
         logger.error(f"Erro ao processar a imagem {img_path}: {e}")
         return None
     
-subsets = ['train', 'validation', 'test']
+# subsets = ['train', 'validation', 'test']
+# labels = ['cn', 'emci', 'mci', 'lmci', 'ad']
+    
+# subsets = ['train', 'validation', 'test']
+labels = ['0.0', '0.5', '1.0']
     
 # DIRETÓRIOS
-DIR_INPUT_BASE = f"/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/NIFTI_RAW"
-DIR_OUTPUT_BASE = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/NIFTI_PROCESSED"
+DIR_BASE = "/mnt/c/Users/Bruno/Desktop/IANS"
+
+DIR_INPUT_BASE = f"{DIR_BASE}/OASIS_2_RAW"
+DIR_OUTPUT_BASE = f"{DIR_BASE}/OASIS_2_PROCESSED"
 os.makedirs(DIR_OUTPUT_BASE, exist_ok=True)
 
-template_path = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c/mni_icbm152_t1_tal_nlin_asym_09c.nii"
+template_path = "/mnt/c/Users/Bruno/Documents/Github/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c/mni_icbm152_t1_tal_nlin_asym_09c.nii"
 template = ants.image_read(template_path)
 
-for subset in subsets:
-    DIR_SUBSET_INPUT = f"{DIR_INPUT_BASE}/{subset}"
-    DIR_SUBSET_OUTPUT = f"{DIR_OUTPUT_BASE}/{subset}"
-    os.makedirs(DIR_SUBSET_OUTPUT, exist_ok=True)
+# for subset in subsets:
+#     DIR_SUBSET_INPUT = f"{DIR_INPUT_BASE}/{subset}"
+#     DIR_SUBSET_OUTPUT = f"{DIR_OUTPUT_BASE}/{subset}"
+#     os.makedirs(DIR_SUBSET_OUTPUT, exist_ok=True)
 
-    for label in ['cn', 'emci', 'mci', 'lmci', 'ad']:
-        DIR_INPUT = f"{DIR_SUBSET_INPUT}/{label}"
-        DIR_OUTPUT = f"{DIR_SUBSET_OUTPUT}/{label}"
-        os.makedirs(DIR_OUTPUT, exist_ok=True)
+for label in labels:
+    DIR_INPUT = f"{DIR_INPUT_BASE}/{label}"
+    DIR_OUTPUT = f"{DIR_OUTPUT_BASE}/{label}"
+    os.makedirs(DIR_OUTPUT, exist_ok=True)
 
-        # Checa o diretório de saída pra ver se alguma imagem já foi processada
-        already_processed = [file for file in os.listdir(DIR_OUTPUT)]
+    # Checa o diretório de saída pra ver se alguma imagem já foi processada
+    already_processed = [file for file in os.listdir(DIR_OUTPUT)]
 
-        # Lista de caminhos para as imagens brutas
-        image_paths = [os.path.join(DIR_INPUT, file) for file in os.listdir(DIR_INPUT) if file not in already_processed]
+    # Lista de caminhos para as imagens brutas
+    image_paths = [os.path.join(DIR_INPUT, file) for file in os.listdir(DIR_INPUT) if file not in already_processed]
 
-        # Início do processamento
-        if __name__ == "__main__":
-            start_time = datetime.now()
-            logger.info(f"Início do processamento em: {start_time}")
+    # Início do processamento
+    if __name__ == "__main__":
+        start_time = datetime.now()
+        logger.info(f"Início do processamento em: {start_time}")
 
-            print(f"\n\nIMAGENS PROCESSADAS: {len(already_processed)}\nIMAGENS A PROCESSAR: {len(image_paths)}\n\n")
+        print(f"\n\nIMAGENS PROCESSADAS: {len(already_processed)}\nIMAGENS A PROCESSAR: {len(image_paths)}\n\n")
 
-            # Função parcial para passar parâmetros fixos
-            process_func = partial(process_image, output_dir=DIR_OUTPUT)
+        # Função parcial para passar parâmetros fixos
+        process_func = partial(process_image, output_dir=DIR_OUTPUT)
 
-            # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
-            with ProcessPoolExecutor(max_workers=16) as executor: #max_workers define o número máximo de processos paralelos
+        # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=8) as executor: #max_workers define o número máximo de processos paralelos
 
-                # dependendo do pc, é melhor fazer um proceso só, pois paralelizar pode deixar cada processo mais demorado sem hardware que aguente
-                futures = [executor.submit(process_func, img_path) for img_path in image_paths]
-                
-                for future in as_completed(futures):
-                    future.result()  # Pega o resultado para garantir que exceções sejam lançadas
+            # dependendo do pc, é melhor fazer um proceso só, pois paralelizar pode deixar cada processo mais demorado sem hardware que aguente
+            futures = [executor.submit(process_func, img_path) for img_path in image_paths]
+            
+            for future in as_completed(futures):
+                future.result()  # Pega o resultado para garantir que exceções sejam lançadas
 
-            # Fim do processamento
-            end_time = datetime.now()
-            logger.info(f"Término do processamento em: {end_time}")
-            logger.info(f"Duração total: {end_time - start_time}")
+        # Fim do processamento
+        end_time = datetime.now()
+        logger.info(f"Término do processamento em: {end_time}")
+        logger.info(f"Duração total: {end_time - start_time}")
