@@ -62,7 +62,7 @@ def process_image(img_path, output_dir, template):
         # Bias Field Correction
         #image = ants.from_numpy(data, origin=image.origin, spacing=image.spacing, direction=image.direction)
         image = ants.n4_bias_field_correction(brain_masked, shrink_factor=2)
-        data = image.numpy()
+        # data = image.numpy()
         logger.info(f"Bias Corrigido.")
 
         # # Winsorizing
@@ -103,11 +103,11 @@ def process_and_save_image(img_path, output_dir, orient, template):
 # Início do processamento
 if __name__ == "__main__":
     # DIRETÓRIOS
-    DIR_BASE = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/ADNI"
-    DIR_RAW = f"{DIR_BASE}/NIFTI_RAW"
-    DIR_OUTPUT = f"{DIR_BASE}/NIFTI_PROCESSED"
+    DIR_BASE = "/mnt/c/Users/Bruno/Desktop/IANS/ADNI"
+    DIR_RAW = f"{DIR_BASE}/ADNI_3_4_RAW"
+    DIR_OUTPUT = f"{DIR_BASE}/ADNI_3_4_PROCESSED"
     os.makedirs(DIR_OUTPUT, exist_ok=True)
-    DIR_MASK = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
+    DIR_MASK = "/mnt/c/Users/Bruno/Documents/Github/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
     
     template_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c.nii')
     mask_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c_mask.nii')
