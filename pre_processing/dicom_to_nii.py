@@ -4,6 +4,7 @@ from concurrent.futures import ProcessPoolExecutor
 import sys
 from datetime import datetime
 import logging
+from tqdm import tqdm
 
 # CONFIGURAÇÕES DO LOG
 logging.basicConfig(
@@ -61,8 +62,8 @@ if __name__ == "__main__":
 
     tot_images = 0
 
-    DIR_BASE = os.path.abspath("/mnt/c/Users/Team Taiane/Desktop/ADNI/FULL_ADNI/DICOM")
-    DIR_RAW = os.path.join("/mnt/c/Users/Team Taiane/Desktop/ADNI/FULL_ADNI/NIFTI_RAW")
+    DIR_BASE = os.path.abspath("/mnt/c/Users/Bruno/Desktop/IANS/ADNI/ADNI_3_4")
+    DIR_RAW = os.path.join("/mnt/c/Users/Bruno/Desktop/IANS/ADNI/ADNI_3_4_RAW")
 
     os.makedirs(DIR_RAW, exist_ok=True)
 
@@ -71,35 +72,39 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logging.info(f"Início do processamento em: {start_time}")
 
-    for subfolder in os.listdir(DIR_BASE):
-        input_dir = os.path.join(DIR_BASE, subfolder)
-        output_dir = os.path.join(DIR_RAW, subfolder)
-        for group in os.listdir(input_dir):
-            logging.info(f"\nCONVERSOES DA PASTA {group}\n")
+    for group in ["cn", "mci", "ad"]:
+        logging.info(f"\nCONVERSOES DA PASTA {group}\n")
 
-            input_folder = os.path.join(input_dir, group)
-            output_folder = os.path.join(output_dir, group)
+        input_folder = os.path.join(DIR_BASE)
+        output_folder = os.path.join(DIR_RAW)
+        os.makedirs(output_folder, exist_ok=True)
 
-            os.makedirs(output_folder, exist_ok=True)
+        already_converted = [file for file in os.listdir(os.path.join(output_folder, group))]
+        dicom_folders = []
 
-            # Coletar todas as pastas DICOM
-            already_converted = [file for file in os.listdir(output_folder)]
-            dicom_folders = [os.path.join(input_folder, file) for file in os.listdir(input_folder) if file not in already_converted]
+        # Coletar todas as pastas DICOM
+        for sub in tqdm(os.listdir(os.path.join(input_folder, group)), f"CARREGANDO: {group}"):
+            names = os.listdir(os.path.join(input_folder, group, sub))
+            datas = os.listdir(os.path.join(input_folder, group, sub, names[0]))
+            file = os.listdir(os.path.join(input_folder, group, sub, names[0], datas[0]))
+            file_path = os.path.join(input_folder, group, sub, names[0], datas[0], file[0])
+            if f"{os.path.basename(file_path)}.nii.gz" not in already_converted:
+                dicom_folders.append(file_path)
 
-            logging.info(f"IMAGENS PROCESSADAS: {len(already_converted)}\nIMAGENS A SEREM PROCESSADAS: {len(dicom_folders)}")
+        logging.info(f"IMAGENS PROCESSADAS: {len(already_converted)}\nIMAGENS A SEREM PROCESSADAS: {len(dicom_folders)}")
 
-            with ProcessPoolExecutor(16) as executor:
-                futures = {executor.submit(convert_dicom_to_nifti, folder, output_folder): folder for folder in dicom_folders}
-                
-                for future in futures:
-                    try:
-                        future.result()  # Relata erros
-                    except Exception as e:
-                        logging.error(f"Erro ao processar {futures[future]}: {e}")
+        with ProcessPoolExecutor(16) as executor:
+            futures = {executor.submit(convert_dicom_to_nifti, folder, os.path.join(output_folder, group)): folder for folder in dicom_folders}
+            
+            for future in futures:
+                try:
+                    future.result()  # Relata erros
+                except Exception as e:
+                    logging.error(f"Erro ao processar {futures[future]}: {e}")
 
-            tot_images += len(dicom_folders)
+        tot_images += len(dicom_folders)
 
-            logging.info(f'\nForam convertidas {len(dicom_folders)} imagens!')
+        logging.info(f'\nForam convertidas {len(dicom_folders)} imagens!')
 
     # Fim do processamento
     logging.info(f'\nForam convertidas {len(dicom_folders)} imagens!')

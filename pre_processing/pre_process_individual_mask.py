@@ -4,12 +4,12 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from functools import partial
 from concurrent.futures import as_completed
-import os
 import numpy as np
 import ants
 import logging
 from antspynet.utilities import brain_extraction
 import gc
+import tensorflow as tf
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Desativa GPUs
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Supressão de logs detalhados do TensorFlow
@@ -36,7 +36,7 @@ def normalize_image(image_data):
     return normalized_data
 
 # Função para processar uma única imagem
-def process_image(img_path, output_dir):
+def process_image(img_path, output_dir, template):
     output_path = os.path.join(output_dir, os.path.basename(img_path))
     try:
         logger.info(f"Inicio processamento: {img_path}")
@@ -62,82 +62,87 @@ def process_image(img_path, output_dir):
         # Bias Field Correction
         #image = ants.from_numpy(data, origin=image.origin, spacing=image.spacing, direction=image.direction)
         image = ants.n4_bias_field_correction(brain_masked, shrink_factor=2)
-        data = image.numpy()
+        # data = image.numpy()
         logger.info(f"Bias Corrigido.")
 
-        # Winsorizing
-        data = winsorize_image(data, 0, 99.9)
-        logger.info(f"Winsorized.")
+        # # Winsorizing
+        # data = winsorize_image(data, 0, 99.9)
+        # logger.info(f"Winsorized.")
 
-        # Normalização
-        data = normalize_image(data)
-        image = ants.from_numpy(data, origin=brain_masked.origin, spacing=brain_masked.spacing, direction=brain_masked.direction)
+        # # Normalização
+        # data = normalize_image(data)
+        # image = ants.from_numpy(data, origin=brain_masked.origin, spacing=brain_masked.spacing, direction=brain_masked.direction)
 
         logger.info(f"Imagem {img_path} processada.")
 
-        ants.image_write(image, output_path)
-        logger.info(f"Imagem salva: {os.path.basename(output_path)}")
+        # ants.image_write(image, output_path)
+        # logger.info(f"Imagem salva: {os.path.basename(output_path)}")
 
         gc.collect()
+        tf.keras.backend.clear_session()
 
         return image
         
     except Exception as e:
         logger.error(f"Erro ao processar a imagem {img_path}: {e}")
         return None
-    
-# subsets = ['train', 'validation', 'test']
-# labels = ['cn', 'emci', 'mci', 'lmci', 'ad']
-    
-# subsets = ['train', 'validation', 'test']
-labels = ['0.0', '0.5', '1.0']
-    
-# DIRETÓRIOS
-DIR_BASE = "/mnt/c/Users/Bruno/Desktop/IANS"
 
-DIR_INPUT_BASE = f"{DIR_BASE}/OASIS_2_RAW"
-DIR_OUTPUT_BASE = f"{DIR_BASE}/OASIS_2_PROCESSED"
-os.makedirs(DIR_OUTPUT_BASE, exist_ok=True)
+# Função que processa e salva uma imagem
+def process_and_save_image(img_path, output_dir, orient, template):
+    # logger.info(f"Imagem em processamento: {img_path}")
+    normalized_image = process_image(img_path, output_dir, template) #processa imagem
+    if normalized_image is not None:
+        os.makedirs(output_dir, exist_ok=True) #cria o diretório onde será salvo caso não exista
+        output_path = os.path.join(output_dir, os.path.basename(img_path)) 
+        ants.image_write(normalized_image, output_path)
+        logger.info(f"Imagem salva: {os.path.basename(output_path)}")
+        # Liberar a memória manualmente
+        normalized_image = None
+        gc.collect()
 
-template_path = "/mnt/c/Users/Bruno/Documents/Github/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c/mni_icbm152_t1_tal_nlin_asym_09c.nii"
-template = ants.image_read(template_path)
-
-# for subset in subsets:
-#     DIR_SUBSET_INPUT = f"{DIR_INPUT_BASE}/{subset}"
-#     DIR_SUBSET_OUTPUT = f"{DIR_OUTPUT_BASE}/{subset}"
-#     os.makedirs(DIR_SUBSET_OUTPUT, exist_ok=True)
-
-for label in labels:
-    DIR_INPUT = f"{DIR_INPUT_BASE}/{label}"
-    DIR_OUTPUT = f"{DIR_OUTPUT_BASE}/{label}"
+# Início do processamento
+if __name__ == "__main__":
+    # DIRETÓRIOS
+    DIR_BASE = "/mnt/c/Users/Bruno/Desktop/IANS/ADNI"
+    DIR_RAW = f"{DIR_BASE}/ADNI_3_4_RAW"
+    DIR_OUTPUT = f"{DIR_BASE}/ADNI_3_4_PROCESSED"
     os.makedirs(DIR_OUTPUT, exist_ok=True)
+    DIR_MASK = "/mnt/c/Users/Bruno/Documents/Github/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
+    
+    template_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c.nii')
+    mask_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c_mask.nii')
 
-    # Checa o diretório de saída pra ver se alguma imagem já foi processada
-    already_processed = [file for file in os.listdir(DIR_OUTPUT)]
+    template = ants.image_read(template_path) 
+    mask = ants.image_read(mask_path) 
 
-    # Lista de caminhos para as imagens brutas
-    image_paths = [os.path.join(DIR_INPUT, file) for file in os.listdir(DIR_INPUT) if file not in already_processed]
+    start_time = datetime.now()
+    logger.info(f"INICIO DO PROCESSAMENTO")
 
-    # Início do processamento
-    if __name__ == "__main__":
-        start_time = datetime.now()
-        logger.info(f"Início do processamento em: {start_time}")
+    for name in os.listdir(f"{DIR_RAW}"): #itera as subpastas dentre o diretório original
+        for class_name in os.listdir(f"{DIR_RAW}/{name}"):
+            input_path = f"{DIR_RAW}/{name}/{class_name}"
+            output_path = f"{DIR_OUTPUT}/{name}/{class_name}"
+            os.makedirs(output_path, exist_ok=True)
 
-        print(f"\n\nIMAGENS PROCESSADAS: {len(already_processed)}\nIMAGENS A PROCESSAR: {len(image_paths)}\n\n")
+            # Caminhos das imagens
+            already_processed = [file for file in os.listdir(output_path)] #checa o diretório de saída pra ver se alguma imagem já foi processada
+            image_paths = [os.path.join(input_path, file) for file in os.listdir(input_path) if file not in already_processed] #carrega o endereço das imagens não processadas
 
-        # Função parcial para passar parâmetros fixos
-        process_func = partial(process_image, output_dir=DIR_OUTPUT)
+            print(f"IMAGENS PROCESSADAS {name}: {len(already_processed)}")
+            print(f"IMAGENS A SEREM PROCESSADAS {name}: {len(image_paths)}")
 
-        # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=8) as executor: #max_workers define o número máximo de processos paralelos
+            # Função parcial para passar parâmetros fixos
+            process_func = partial(process_and_save_image, output_dir=output_path, orient='IRA', template=template)
 
-            # dependendo do pc, é melhor fazer um proceso só, pois paralelizar pode deixar cada processo mais demorado sem hardware que aguente
-            futures = [executor.submit(process_func, img_path) for img_path in image_paths]
-            
-            for future in as_completed(futures):
-                future.result()  # Pega o resultado para garantir que exceções sejam lançadas
+            # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=4) as executor: #max_workers define o número máximo de processos paralelos
+                # dependendo do pc, é melhor fazer um por vez, pois paralelizar pode deixar cada processo mais demorado sem hardware que aguente
+                futures = [executor.submit(process_func, img_path) for img_path in image_paths]
+                
+                for future in as_completed(futures):
+                    future.result()  # Pega o resultado para garantir que exceções sejam lançadas
 
-        # Fim do processamento
-        end_time = datetime.now()
-        logger.info(f"Término do processamento em: {end_time}")
-        logger.info(f"Duração total: {end_time - start_time}")
+    # Fim do processamento
+    end_time = datetime.now()
+    logger.info(f"FIM DO PROCESSAMENTO")
+    logger.info(f"Duração total: {end_time - start_time}")
