@@ -65,16 +65,41 @@ def load_nifti_paths(base_dir, class_names):
 # Função para carregar dados de forma otimizada (em memória, mas não tanto em tempo), podendo definir o número máximo de dados a serem carregados por classe.
 # Podemos aplicar ruídos ou não.
 def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, target_per_class=1000):    
-    available_transforms = [
-        tio.RandomBlur(p=1.0),
-        tio.RandomNoise(p=1.0, std=(0, 0.05)),
-        tio.RandomAnisotropy(p=1.0),
-        tio.RandomElasticDeformation(p=1.0),
-        tio.RandomBiasField(p=1.0),
-        tio.RandomMotion(p=1.0),
-        tio.RandomSpike(p=1.0),
-        tio.RandomGhosting(p=1.0),
-    ]
+    if augment:
+        # 1. Transformações Espaciais (Geometria)
+        # Aplica AMBAS AS OPÇÕES dessa lista
+        spatial_transforms = tio.Compose([
+            # Rotações leves e Zoom são seguros e ajudam muito
+            tio.RandomAffine(
+                scales=(0.9, 1.1),      
+                degrees=10,             
+                isotropic=True,         # Mantém proporção
+                p=0.75                  # 75% de chance de acontecer
+            ),
+            # Deformação elástica para simular variações anatômicas reais
+            tio.RandomElasticDeformation(
+                num_control_points=7, 
+                max_displacement=7.5,
+                locked_borders=2,
+                p=0.15                  # 15% de chance de acontecer
+            )
+        ])
+
+        # 2. Transformações de Intensidade/Física (Artefatos)
+        # Escolhe APENAS UMA dessa lista (ou nenhuma)
+        # Isso evita destruir a imagem somando Ruído + Ghosting + Blur ao mesmo tempo e virando uma imagem irreconhecível
+        artifact_transforms = tio.OneOf({
+            tio.RandomBiasField(): 0.5,       # Muito comum em MRI
+            tio.RandomGhosting(): 0.2,        # Movimento do paciente
+            tio.RandomMotion(degrees=5, translation=5): 0.2, # Movimento leve no MRI
+            tio.RandomNoise(std=0.05): 0.2,   # Ruído Rician/Gaussiano leve
+            tio.RandomBlur(std=(0, 1)): 0.1,  # Blur leve
+        }, p=0.5)                             # 50% de chance de aplicar algum artefato
+
+        transform_composer = tio.Compose([
+            spatial_transforms,
+            artifact_transforms,
+        ])
 
     all_paths = []
     all_labels = []
@@ -125,21 +150,26 @@ def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, 
             img_nib = nib.load(img_path)
             img_data_f16 = img_nib.get_fdata(dtype=np.float16)
             
-            if augment:
-                # Seleciona aleatoriamente de 1 a 6 transformações do pool
-                num_transforms = random.randint(1, 6)
-                selected_transforms = random.sample(available_transforms, num_transforms)
-                transform_composer = tio.Compose(selected_transforms)
+            img_final = None
 
+            if augment:
+                # Conversão necessária para TorchIO (Float32 e canal de dimensão)
                 img_data_f32 = img_data_f16.astype(np.float32)
+                
+                # Cria o Subject do TorchIO e passa o affine para transformações geométricas corretas
                 subject = tio.Subject(
                     mri=tio.ScalarImage(tensor=img_data_f32[np.newaxis, ...], affine=img_nib.affine)
                 )
-                # Aplica a composição
-                transformed_data_f32 = transform_composer(subject).mri.data.numpy().squeeze(axis=0)
+
+                # O TorchIO gerencia a aleatoriedade interna baseada nos 'p' definidos
+                transformed_subject = transform_composer(subject)
+                
+                # Recupera os dados
+                transformed_data_f32 = transformed_subject.mri.data.numpy().squeeze(axis=0)
                 img_final = transformed_data_f32.astype(np.float16)
                 
-                del img_data_f32, subject, transformed_data_f32, transform_composer, selected_transforms
+                # Limpeza explícita não é estritamente necessária aqui para variáveis pequenas, mas mal não faz.
+                del img_data_f32, subject, transformed_subject, transformed_data_f32
             else:
                 img_final = img_data_f16
             

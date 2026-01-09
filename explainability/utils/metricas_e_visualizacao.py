@@ -64,8 +64,8 @@ def plot_training_history(history, dir, title='training_history.png'):
 
     # Plot Accuracy
     plt.subplot(1, 2, 2)
-    plt.plot(history.history['categorical_accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_categorical_accuracy'], label='Validation Accuracy')
+    plt.plot(history.history['binary_accuracy'], label='Training Accuracy')
+    plt.plot(history.history['val_binary_accuracy'], label='Validation Accuracy')
     plt.title('Accuracy Graphic')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy')
