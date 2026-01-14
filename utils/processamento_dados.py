@@ -170,14 +170,22 @@ def load_nifti_paths(base_dir, class_names):
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Função para carregar dados de forma otimizada (em memória, mas não tanto em tempo), podendo definir o número máximo de dados a serem carregados por classe.
-def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, target_per_class=1000, augmentation_factor=1):
+def load_nifti_data_balanced_preallocated(
+    base_dir, 
+    class_names, 
+    augment=False, 
+    target_per_class=1000, 
+    augmentation_factor=1,       # Controle de quantidade (1x, 2x, 3x, etc.)
+    include_intensity=True,      # Controle de Tipo (Geo vs Geo+Intensidade)
+    transform_probability=1.0    # Controle de Mix (1.0 = substitui tudo por modificações, <1.0 = mistura original + modificação)
+):
     # Garante fator mínimo de 1
     if augmentation_factor < 1:
         augmentation_factor = 1
 
     transform_composer = None
-    if augment:
-        # 1. Transformações Espaciais (Geometria)
+    if augment:        
+        # 1. Transformações Espaciais (Sempre presentes se augment=True)
         spatial_transforms = tio.Compose([
             tio.RandomAffine(
                 scales=(0.9, 1.1),
@@ -193,25 +201,30 @@ def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, 
             )
         ])
 
-        # 2. Transformações de Intensidade
-        artifact_transforms = tio.OneOf({
-            tio.RandomBiasField(): 0.5,
-            tio.RandomGhosting(): 0.2,
-            tio.RandomMotion(degrees=5, translation=5): 0.2,
-            tio.RandomNoise(std=0.05): 0.2,
-            tio.RandomBlur(std=(0, 1)): 0.1,
-        }, p=0.5)
+        # 2. Montagem do Compositor Baseado na Flag de Intensidade
+        if include_intensity:
+            # Se True, adiciona artefatos físicos
+            artifact_transforms = tio.OneOf({
+                tio.RandomBiasField(): 0.5,
+                tio.RandomGhosting(): 0.2,
+                tio.RandomMotion(degrees=5, translation=5): 0.2,
+                tio.RandomNoise(std=0.05): 0.2,
+                tio.RandomBlur(std=(0, 1)): 0.1,
+            }, p=0.5)
 
-        transform_composer = tio.Compose([
-            spatial_transforms,
-            artifact_transforms,
-        ])
+            transform_composer = tio.Compose([
+                spatial_transforms,
+                artifact_transforms,
+            ])
+        else:
+            # Se False, usa APENAS geometria
+            transform_composer = spatial_transforms
 
     all_paths = []
     all_labels = []
-    all_transform_flags = [] # Nova lista para controlar quem sofre aug e quem não
+    all_transform_flags = [] 
 
-    print("Passo 1: Coletando lista de arquivos...")
+    print("Passo 1: Coletando arquivos e definindo estratégia...")
     for label in class_names:
         label_dir = os.path.join(base_dir, label)
         count = 0
@@ -221,43 +234,43 @@ def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, 
             if count < target_per_class:
                 full_path = os.path.join(label_dir, fname)
                 
-                # Define quantas cópias e quais tipos (Original vs Transformed)
                 flags_to_add = []
                 
                 if not augment:
-                    # Se não tem augment, é 1 cópia original sempre (ignora o factor)
+                    # Sem augment: 1 cópia original sempre
                     flags_to_add.append(False)
                 else:
-                    if augmentation_factor == 1:
-                        # Comportamento antigo: Troca a original pela transformada
-                        flags_to_add.append(True)
-                    else:
-                        # Comportamento novo: Mantém a original
-                        flags_to_add.append(False)
-                        # E gera N-1 transformadas
-                        for _ in range(augmentation_factor - 1):
+                    # Gera 'augmentation_factor' entradas para esta imagem
+                    for _ in range(augmentation_factor):
+                        # Decide individualmente se essa cópia será transformada
+                        # Se transform_probability for 1.0 (padrão), SEMPRE transforma (descarta original)
+                        # Se for diferente de 1.0, tem X% de chance de manter original (criando um mix)
+                        if random.random() < transform_probability:
                             flags_to_add.append(True)
+                        else:
+                            flags_to_add.append(False)
                 
-                # Adiciona as entradas nas listas
+                # Preenche as listas
                 for should_transform in flags_to_add:
                     all_paths.append(full_path)
                     all_transform_flags.append(should_transform)
                     
-                    if label in ['cn', '0.0']:
+                    if label in ['cn', '0.0', '0', 0]:
                         all_labels.append(0)
                     else:
                         all_labels.append(1)
                 
                 count += 1
                 
-    print(f"Total de {len(all_paths)} imagens planejadas (incluindo aumentos).")
+    print(f"Total de {len(all_paths)} imagens planejadas.")
 
+    # Codificação de labels
     label_encoder = LabelEncoder()
     label_encoder.classes_ = np.array([0, 1])
     labels_encoded = label_encoder.transform(all_labels)
-    labels_one_hot = to_categorical(labels_encoded, num_classes=len([0, 1])).astype(np.float16) 
+    labels_one_hot = to_categorical(labels_encoded, num_classes=2).astype(np.float16) 
     
-    # Shuffle agora inclui as flags para manter a sincronia
+    # Shuffle com as flags
     all_paths_shuffled, labels_one_hot_shuffled, flags_shuffled = shuffle(
         all_paths, labels_one_hot, all_transform_flags, random_state=42
     )
@@ -269,24 +282,22 @@ def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, 
         print("Nenhuma imagem encontrada.")
         return np.array([]), np.array([]), [], label_encoder.classes_
 
-    print("Passo 2: Determinando o shape da imagem...")
+    print("Passo 2: Detectando shape e Alocando Memória...")
     try:
         first_img_nib = nib.load(all_paths_shuffled[0])
         img_shape = first_img_nib.get_fdata(dtype=np.float16).shape
     except Exception as e:
-        print(f"Erro ao carregar a primeira imagem: {e}")
+        print(f"Erro: {e}")
         return
 
     total_images = len(all_paths_shuffled)
-    print(f"Shape detectado: {img_shape}. Alocando memória para {total_images} imagens...")
-    
     images_final = np.empty((total_images, *img_shape, 1), dtype=np.float16)
     paths_final = [None] * total_images
 
-    print("Passo 3: Carregando e transformando imagens...")
+    print("Passo 3: Carregando e Processando...")
     for i in range(total_images):
         img_path = all_paths_shuffled[i]
-        should_transform = flags_shuffled[i] # Verifica a flag individual
+        should_transform = flags_shuffled[i] # A flag decide o destino desta imagem
         
         try:
             img_nib = nib.load(img_path)
@@ -294,15 +305,14 @@ def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, 
             
             img_final = None
 
-            # Só aplica transformação se a flag for True (e augment estiver ligado globalmente)
+            # Aplica transformação SOMENTE se a flag permitir E houver compositor
             if should_transform and transform_composer:
-                # Conversão necessária para TorchIO (Float32 e canal de dimensão)
                 img_data_f32 = img_data_f16.astype(np.float32)
-                
                 subject = tio.Subject(
                     mri=tio.ScalarImage(tensor=img_data_f32[np.newaxis, ...], affine=img_nib.affine)
                 )
-
+                
+                # Aqui o TorchIO sorteia os parâmetros aleatórios
                 transformed_subject = transform_composer(subject)
                 
                 transformed_data_f32 = transformed_subject.mri.data.numpy().squeeze(axis=0)
@@ -310,22 +320,22 @@ def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, 
                 
                 del img_data_f32, subject, transformed_subject, transformed_data_f32
             else:
-                # Caso seja para manter original
+                # Mantém original
                 img_final = img_data_f16
             
             images_final[i] = img_final.reshape((*img_shape, 1))
             paths_final[i] = img_path
 
         except Exception as e:
-            print(f"Erro em {img_path}: {e}. Inserindo array vazio.")
+            print(f"Erro em {img_path}: {e}")
             images_final[i] = np.zeros((*img_shape, 1), dtype=np.float16)
             paths_final[i] = img_path
         
-        if (i + 1) % 50 == 0:
+        if (i + 1) % 100 == 0:
             gc.collect()
-            print(f"Processado {i + 1}/{total_images}...")
+            print(f"Progresso: {i + 1}/{total_images}")
             
-    print("Passo 4: Carregamento concluído.")
+    print("Concluído.")
     return images_final, labels_one_hot_shuffled, paths_final, label_encoder.classes_
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------

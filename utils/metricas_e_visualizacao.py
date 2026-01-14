@@ -87,6 +87,19 @@ def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names):
     plt.savefig(f'{dir}/{subset}_confusion_matrix.png')
     plt.show()
 
+def save_confusion_matrix(y_true, y_pred, directory, fold_num):
+    cm = confusion_matrix(y_true, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['CN', 'AD'])
+    
+    fig, ax = plt.subplots(figsize=(6, 5))
+    disp.plot(cmap=plt.cm.Blues, ax=ax, values_format='d')
+    ax.set_title(f"Confusion Matrix - Fold {fold_num}")
+    
+    save_path = os.path.join(directory, f"confusion_matrix_fold_{fold_num}.png")
+    plt.savefig(save_path)
+    plt.close()
+    print(f"   Matriz de confusão salva em: {save_path}")
+
 def get_classification_report(y_true, y_pred, dir, subset):
     report = classification_report(y_true, y_pred)
     print(report)
