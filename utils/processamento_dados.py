@@ -38,39 +38,62 @@ from tensorflow.keras import backend as K
 # --- FUNÇÕES DE CARREGAMENTO E AUGMENTATION (Devem vir ANTES do fluxo principal) ---
 
 def load_nifti_data(data_dir):
-    X = []
-    y = []
+    """
+    Carrega dados NIfTI otimizando a memória:
+    1. Lista todos os arquivos primeiro.
+    2. Embaralha a lista de arquivos.
+    3. Só então carrega as imagens pesadas.
+    """
+    file_list = [] # Vai guardar tuplas: (caminho_arquivo, label_idx)
     classes = {'cn': 0, 'ad': 1}
     
-    print(f"Carregando dados de: {data_dir}")
+    print(f"Mapeando arquivos em: {data_dir}")
     
+    # 1. Coletar todos os caminhos e labels (apenas strings, gasta pouca RAM)
     for label_name, label_idx in classes.items():
         folder_path = os.path.join(data_dir, label_name)
         if not os.path.exists(folder_path):
             print(f"Aviso: Pasta {folder_path} não encontrada.")
             continue
             
+        # Lista arquivos
         files = [f for f in os.listdir(folder_path) if f.endswith(('.nii', '.nii.gz'))]
-        
-        # tqdm aqui ajuda a ver o progresso do carregamento
-        for file_name in tqdm(files, desc=f"Lendo {label_name}"):
+        for file_name in files:
             file_path = os.path.join(folder_path, file_name)
-            try:
-                img = nib.load(file_path)
-                data = img.get_fdata().astype(np.float32) # Força float32 para economizar RAM
-                
-                X.append(data)
-                y.append(label_idx)
-            except Exception as e:
-                print(f"Erro ao ler {file_name}: {e}")
+            file_list.append((file_path, label_idx))
+            
+    # 2. O PULO DO GATO: Shuffle nos caminhos antes de carregar
+    # Isso evita ter que mover arrays gigantes na memória depois
+    print(f"Embaralhando {len(file_list)} caminhos de arquivos...")
+    random.shuffle(file_list)
+    
+    # 3. Carregar os dados (já na ordem aleatória final)
+    X = []
+    y = []
+    
+    print("Iniciando carregamento das imagens...")
+    for file_path, label_idx in tqdm(file_list, desc="Carregando NifTI"):
+        try:
+            img = nib.load(file_path)
+            # Carrega e já converte para float32 para economizar memória vs float64
+            data = img.get_fdata().astype(np.float32)
+            
+            X.append(data)
+            y.append(label_idx)
+        except Exception as e:
+            print(f"Erro ao ler {file_path}: {e}")
 
+    # 4. Converter para Numpy
+    print("Convertendo lista para array numpy...")
     X = np.array(X, dtype=np.float32)
     y = np.array(y, dtype=np.int32)
     
+    # Ajuste de dimensão (Adiciona canal se for 3D -> 4D)
+    # Ex: (N, 156, 195, 160) -> (N, 156, 195, 160, 1)
     if X.ndim == 4: 
         X = np.expand_dims(X, axis=-1)
         
-    print(f"Dados carregados. Shape: {X.shape}")
+    print(f"Dados carregados e embaralhados. Shape: {X.shape}")
     return X, y
 
 def augment_zoom(volume):
