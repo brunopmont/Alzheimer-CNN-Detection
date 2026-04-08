@@ -191,8 +191,6 @@ def load_nifti_paths(base_dir, class_names):
     return image_paths, labels_one_hot, label_encoder.classes_
 
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-# Função para carregar dados de forma otimizada (em memória, mas não tanto em tempo), podendo definir o número máximo de dados a serem carregados por classe.
 def load_nifti_data_balanced_preallocated(
     base_dir, 
     class_names, 
@@ -202,7 +200,6 @@ def load_nifti_data_balanced_preallocated(
     include_intensity=True,      
     transform_probability=1.0    
 ):
-    # Garante fator mínimo de 1
     if augmentation_factor < 1:
         augmentation_factor = 1
 
@@ -211,13 +208,11 @@ def load_nifti_data_balanced_preallocated(
     # ==============================================================================
     transform_composer = None
     if augment:        
-        # 1. Transformações Espaciais
         spatial_transforms = tio.Compose([
             tio.RandomAffine(scales=(0.9, 1.1), degrees=10, isotropic=True, p=0.75),
             tio.RandomElasticDeformation(num_control_points=7, max_displacement=7.5, locked_borders=2, p=0.15)
         ])
 
-        # 2. Montagem do Compositor
         if include_intensity:
             artifact_transforms = tio.OneOf({
                 tio.RandomBiasField(): 0.5,
@@ -226,43 +221,34 @@ def load_nifti_data_balanced_preallocated(
                 tio.RandomNoise(std=0.05): 0.2,
                 tio.RandomBlur(std=(0, 1)): 0.1,
             }, p=0.5)
-
             transform_composer = tio.Compose([spatial_transforms, artifact_transforms])
         else:
             transform_composer = spatial_transforms
 
     # ==============================================================================
-    # FASE 1: DESCOBERTA E CÁLCULO DE BALANCEAMENTO
+    # FASE 1: DESCOBERTA
     # ==============================================================================
-    print("Passo 1: Analisando diretórios para balanceamento...")
-    
+    print("Passo 1: Analisando diretórios...")
     class_files = {}
     max_count = 0
 
-    # Coleta todos os arquivos válidos primeiro
     for label in class_names:
         label_dir = os.path.join(base_dir, label)
-        names = os.listdir(label_dir)
+        names = sorted(os.listdir(label_dir)) # Ordenação para consistência
         
-        # Limita ao target_per_class se necessário (apenas para leitura inicial)
         if len(names) > target_per_class:
             names = names[:target_per_class]
             
         class_files[label] = names
         count = len(names)
-        
-        if count > max_count:
-            max_count = count
-            
-        print(f"   > Classe '{label}': {count} imagens originais encontradas.")
+        if count > max_count: max_count = count
+        print(f"   > Classe '{label}': {count} originais.")
 
-    # Define o alvo final (baseado na classe majoritária * fator de aumento global)
-    # Ex: Se max_count é 500 e queremos augmentation_factor 2x, o alvo por classe é 1000.
     target_final_count = max_count * augmentation_factor
-    print(f"   > Alvo de balanceamento: ~{target_final_count} imagens por classe.")
+    print(f"   > Alvo final: ~{target_final_count} por classe.")
 
     # ==============================================================================
-    # FASE 2: PLANEJAMENTO DA LISTA DE ARQUIVOS
+    # FASE 2: PLANEJAMENTO (AJUSTADO PARA MANTER ORIGINAIS)
     # ==============================================================================
     all_paths = []
     all_labels = []
@@ -271,135 +257,90 @@ def load_nifti_data_balanced_preallocated(
     for label in class_names:
         files = class_files[label]
         n_files = len(files)
-        
-        if n_files == 0:
-            continue
+        if n_files == 0: continue
 
-        # CALCULO DINÂMICO: Quantas cópias CADA imagem dessa classe precisa gerar
-        # para alcançar o target_final_count?
-        # Ex: Se alvo é 1000 e tenho 100 imagens -> preciso de 10 cópias por imagem.
+        # Quantas cópias totais cada imagem terá para atingir o alvo da classe
         copies_per_image = math.ceil(target_final_count / n_files)
         
-        # Garante que, se não tiver augment, não duplicamos (a menos que seja explicitamente desejado, 
-        # mas aqui assumimos que sem augment = 1 cópia original apenas)
+        # Se augment=False, forçamos apenas 1 cópia (a original)
         if not augment:
             copies_per_image = 1
 
-        print(f"   > Processando '{label}': Gerando {copies_per_image} cópias por imagem (Total esperado: {n_files * copies_per_image})")
+        print(f"   > '{label}': 1 original + {copies_per_image-1} possíveis aumentos por imagem.")
 
         for fname in files:
             full_path = os.path.join(base_dir, label, fname)
             
-            flags_to_add = []
+            # --- Lógica de Flags ---
+            # A primeira cópia (índice 0) é SEMPRE False (Original)
+            flags_to_add = [False]
             
-            # Gera as flags baseadas no número calculado de cópias
-            for _ in range(copies_per_image):
-                if not augment:
-                    flags_to_add.append(False)
+            # As cópias subsequentes seguem o augmentation_factor
+            for c in range(1, copies_per_image):
+                if augment and random.random() < transform_probability:
+                    flags_to_add.append(True)  # Será transformada
                 else:
-                    # Lógica do Mix:
-                    if random.random() < transform_probability:
-                        flags_to_add.append(True)  # Modificada
-                    else:
-                        flags_to_add.append(False) # Original
+                    flags_to_add.append(False) # Será uma cópia simples da original
             
-            # Adiciona nas listas globais
             for should_transform in flags_to_add:
                 all_paths.append(full_path)
                 all_transform_flags.append(should_transform)
-                
-                # Mapeamento do Label (Ajuste conforme seus nomes de pasta)
-                if label in ['cn', '0.0', '0', 0, 'CN']:
-                    all_labels.append(0)
-                else:
-                    all_labels.append(1)
+                # Mapeamento binário simples
+                all_labels.append(0 if label in ['cn', '0.0', '0', 0, 'CN'] else 1)
 
-    print(f"Total planejado final: {len(all_paths)} imagens.")
-
-    # Codificação de labels
+    # Codificação e Shuffle
     label_encoder = LabelEncoder()
-    label_encoder.classes_ = np.array([0, 1])
-    try:
-        labels_encoded = label_encoder.transform(all_labels)
-    except ValueError as e:
-         # Fallback caso classes não numéricas apareçam
-        print(f"Aviso: Classes detectadas {np.unique(all_labels)}. Ajustando encoder...")
-        label_encoder.fit(all_labels)
-        labels_encoded = label_encoder.transform(all_labels)
-
-    labels_one_hot = to_categorical(labels_encoded, num_classes=2).astype(np.float16) 
+    label_encoder.fit([0, 1])
+    labels_one_hot = to_categorical(label_encoder.transform(all_labels), num_classes=2).astype(np.float16)
     
-    # Shuffle (Mistura tudo)
     all_paths_shuffled, labels_one_hot_shuffled, flags_shuffled = shuffle(
         all_paths, labels_one_hot, all_transform_flags, random_state=42
     )
     
-    del all_labels, labels_encoded, labels_one_hot, all_transform_flags, all_paths
+    del all_labels, all_paths, all_transform_flags
     gc.collect()
 
-    if not all_paths_shuffled:
-        print("Nenhuma imagem encontrada.")
-        return np.array([]), np.array([]), [], label_encoder.classes_
-
     # ==============================================================================
-    # FASE 3: CARREGAMENTO EM MEMÓRIA
+    # FASE 3: CARREGAMENTO (IDÊNTICO AO ANTERIOR, MAS OTIMIZADO)
     # ==============================================================================
-    print("Passo 2: Detectando shape e Alocando Memória...")
-    try:
-        first_img_nib = nib.load(all_paths_shuffled[0])
-        img_shape = first_img_nib.get_fdata(dtype=np.float16).shape
-    except Exception as e:
-        print(f"Erro: {e}")
-        return
-
+    print(f"Passo 2: Alocando para {len(all_paths_shuffled)} imagens...")
+    first_img_nib = nib.load(all_paths_shuffled[0])
+    img_shape = first_img_nib.header.get_data_shape() # Mais rápido que get_fdata
+    
     total_images = len(all_paths_shuffled)
     images_final = np.empty((total_images, *img_shape, 1), dtype=np.float16)
     paths_final = [None] * total_images
 
-    print("Passo 3: Carregando e Processando...")
     for i in range(total_images):
         img_path = all_paths_shuffled[i]
         should_transform = flags_shuffled[i] 
         
         try:
             img_nib = nib.load(img_path)
-            img_data_f16 = img_nib.get_fdata(dtype=np.float16)
+            # Carrega direto em float16 para economizar pico de RAM
+            img_data = img_nib.get_fdata(dtype=np.float32) 
             
-            img_final = None
-
-            # Aplica transformação SOMENTE se a flag permitir E houver compositor
             if should_transform and transform_composer:
-                img_data_f32 = img_data_f16.astype(np.float32)
                 subject = tio.Subject(
-                    mri=tio.ScalarImage(tensor=img_data_f32[np.newaxis, ...], affine=img_nib.affine)
+                    mri=tio.ScalarImage(tensor=img_data[np.newaxis, ...], affine=img_nib.affine)
                 )
-                
-                # Augmentation acontece aqui
-                transformed_subject = transform_composer(subject)
-                
-                transformed_data_f32 = transformed_subject.mri.data.numpy().squeeze(axis=0)
-                img_final = transformed_data_f32.astype(np.float16)
-                
-                del img_data_f32, subject, transformed_subject, transformed_data_f32
+                transformed = transform_composer(subject)
+                img_final = transformed.mri.data.numpy().squeeze(axis=0).astype(np.float16)
             else:
-                # Mantém original
-                img_final = img_data_f16
+                img_final = img_data.astype(np.float16)
             
-            images_final[i] = img_final.reshape((*img_shape, 1))
+            images_final[i] = img_final[..., np.newaxis]
             paths_final[i] = img_path
 
         except Exception as e:
-            print(f"Erro em {img_path}: {e}")
+            print(f"\nErro em {img_path}: {e}")
             images_final[i] = np.zeros((*img_shape, 1), dtype=np.float16)
-            paths_final[i] = img_path
         
-        if (i + 1) % 100 == 0:
-            gc.collect()
+        if (i + 1) % 50 == 0:
             print(f"Progresso: {i + 1}/{total_images}", end='\r')
             
     print("\nConcluído.")
     return images_final, labels_one_hot_shuffled, paths_final, label_encoder.classes_
-
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Função geradora para ser passada durante o treinamento
