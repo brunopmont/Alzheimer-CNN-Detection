@@ -167,3 +167,12 @@ cuda_12.1.1_530.30.02_linux.run
 cudnn-linux-x86_64-8.9.7.29_cuda12-archive.tar.xz
 Miniconda3-latest-Linux-x86_64.sh
 pdf/
+reproducao_artigos/AD_classification/1.5T_data
+reproducao_artigos/AD_classification/ADNI_samples_list.txt
+reproducao_artigos/AD_classification/results
+reproducao_artigos/TL4ADdiagnosis/3T_data
+reproducao_artigos/TL4ADdiagnosis/3T_data_npy
+reproducao_artigos/TL4ADdiagnosis/DA_Results
+reproducao_artigos/TL4ADdiagnosis/GA_Results
+reproducao_artigos/TL4ADdiagnosis/augment
+reproducao_artigos/TL4ADdiagnosis/features

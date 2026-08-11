@@ -38,39 +38,62 @@ from tensorflow.keras import backend as K
 # --- FUNÇÕES DE CARREGAMENTO E AUGMENTATION (Devem vir ANTES do fluxo principal) ---
 
 def load_nifti_data(data_dir):
-    X = []
-    y = []
+    """
+    Carrega dados NIfTI otimizando a memória:
+    1. Lista todos os arquivos primeiro.
+    2. Embaralha a lista de arquivos.
+    3. Só então carrega as imagens pesadas.
+    """
+    file_list = [] # Vai guardar tuplas: (caminho_arquivo, label_idx)
     classes = {'cn': 0, 'ad': 1}
     
-    print(f"Carregando dados de: {data_dir}")
+    print(f"Mapeando arquivos em: {data_dir}")
     
+    # 1. Coletar todos os caminhos e labels (apenas strings, gasta pouca RAM)
     for label_name, label_idx in classes.items():
         folder_path = os.path.join(data_dir, label_name)
         if not os.path.exists(folder_path):
             print(f"Aviso: Pasta {folder_path} não encontrada.")
             continue
             
+        # Lista arquivos
         files = [f for f in os.listdir(folder_path) if f.endswith(('.nii', '.nii.gz'))]
-        
-        # tqdm aqui ajuda a ver o progresso do carregamento
-        for file_name in tqdm(files, desc=f"Lendo {label_name}"):
+        for file_name in files:
             file_path = os.path.join(folder_path, file_name)
-            try:
-                img = nib.load(file_path)
-                data = img.get_fdata().astype(np.float32) # Força float32 para economizar RAM
-                
-                X.append(data)
-                y.append(label_idx)
-            except Exception as e:
-                print(f"Erro ao ler {file_name}: {e}")
+            file_list.append((file_path, label_idx))
+            
+    # 2. O PULO DO GATO: Shuffle nos caminhos antes de carregar
+    # Isso evita ter que mover arrays gigantes na memória depois
+    print(f"Embaralhando {len(file_list)} caminhos de arquivos...")
+    random.shuffle(file_list)
+    
+    # 3. Carregar os dados (já na ordem aleatória final)
+    X = []
+    y = []
+    
+    print("Iniciando carregamento das imagens...")
+    for file_path, label_idx in tqdm(file_list, desc="Carregando NifTI"):
+        try:
+            img = nib.load(file_path)
+            # Carrega e já converte para float32 para economizar memória vs float64
+            data = img.get_fdata().astype(np.float32)
+            
+            X.append(data)
+            y.append(label_idx)
+        except Exception as e:
+            print(f"Erro ao ler {file_path}: {e}")
 
+    # 4. Converter para Numpy
+    print("Convertendo lista para array numpy...")
     X = np.array(X, dtype=np.float32)
     y = np.array(y, dtype=np.int32)
     
+    # Ajuste de dimensão (Adiciona canal se for 3D -> 4D)
+    # Ex: (N, 156, 195, 160) -> (N, 156, 195, 160, 1)
     if X.ndim == 4: 
         X = np.expand_dims(X, axis=-1)
         
-    print(f"Dados carregados. Shape: {X.shape}")
+    print(f"Dados carregados e embaralhados. Shape: {X.shape}")
     return X, y
 
 def augment_zoom(volume):
@@ -168,166 +191,316 @@ def load_nifti_paths(base_dir, class_names):
     return image_paths, labels_one_hot, label_encoder.classes_
 
 # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-# Função para carregar dados de forma otimizada (em memória, mas não tanto em tempo), podendo definir o número máximo de dados a serem carregados por classe.
-def load_nifti_data_balanced_preallocated(base_dir, class_names, augment=False, target_per_class=1000, augmentation_factor=1):
-    # Garante fator mínimo de 1
-    if augmentation_factor < 1:
-        augmentation_factor = 1
-
-    transform_composer = None
+def load_nifti_data_balanced_preallocated(
+    base_dir, class_names, augment=False, target_per_class=1000, 
+    include_intensity=True, transform_probability=1.0
+):
+    # configuracao do tio.composer
+    composer = None
     if augment:
-        # 1. Transformações Espaciais (Geometria)
-        spatial_transforms = tio.Compose([
-            tio.RandomAffine(
-                scales=(0.9, 1.1),
-                degrees=10,
-                isotropic=True,
-                p=0.75
-            ),
-            tio.RandomElasticDeformation(
-                num_control_points=7,
-                max_displacement=7.5,
-                locked_borders=2,
-                p=0.15
-            )
+        spatial = tio.Compose([
+            tio.RandomAffine(scales=(0.9, 1.1), degrees=10, isotropic=True, p=0.75),
+            tio.RandomElasticDeformation(num_control_points=7, max_displacement=7.5, locked_borders=2, p=0.15)
         ])
+        intensity = tio.OneOf({tio.RandomBiasField(): 0.5, tio.RandomGhosting(): 0.2, 
+                               tio.RandomMotion(): 0.2, tio.RandomNoise(): 0.1}, p=0.5) if include_intensity else None
+        composer = tio.Compose([spatial, intensity]) if intensity else spatial
 
-        # 2. Transformações de Intensidade
-        artifact_transforms = tio.OneOf({
-            tio.RandomBiasField(): 0.5,
-            tio.RandomGhosting(): 0.2,
-            tio.RandomMotion(degrees=5, translation=5): 0.2,
-            tio.RandomNoise(std=0.05): 0.2,
-            tio.RandomBlur(std=(0, 1)): 0.1,
-        }, p=0.5)
+    # num_classes vai definir as dimensoes do one-hot (removido is_binary)
+    num_classes = len(class_names)
 
-        transform_composer = tio.Compose([
-            spatial_transforms,
-            artifact_transforms,
-        ])
-
-    all_paths = []
-    all_labels = []
-    all_transform_flags = [] # Nova lista para controlar quem sofre aug e quem não
-
-    print("Passo 1: Coletando lista de arquivos...")
-    for label in class_names:
+    # planejamento do balanceamento por classe
+    all_info = []
+    for idx, label in enumerate(class_names):
         label_dir = os.path.join(base_dir, label)
-        count = 0
-        names = os.listdir(label_dir)
+        if not os.path.exists(label_dir): continue
         
-        for fname in names:
-            if count < target_per_class:
-                full_path = os.path.join(label_dir, fname)
-                
-                # Define quantas cópias e quais tipos (Original vs Transformed)
-                flags_to_add = []
-                
-                if not augment:
-                    # Se não tem augment, é 1 cópia original sempre (ignora o factor)
-                    flags_to_add.append(False)
-                else:
-                    if augmentation_factor == 1:
-                        # Comportamento antigo: Troca a original pela transformada
-                        flags_to_add.append(True)
-                    else:
-                        # Comportamento novo: Mantém a original
-                        flags_to_add.append(False)
-                        # E gera N-1 transformadas
-                        for _ in range(augmentation_factor - 1):
-                            flags_to_add.append(True)
-                
-                # Adiciona as entradas nas listas
-                for should_transform in flags_to_add:
-                    all_paths.append(full_path)
-                    all_transform_flags.append(should_transform)
-                    
-                    if label in ['cn', '0.0']:
-                        all_labels.append(0)
-                    else:
-                        all_labels.append(1)
-                
-                count += 1
-                
-    print(f"Total de {len(all_paths)} imagens planejadas (incluindo aumentos).")
+        files = sorted(os.listdir(label_dir))
+        n_originais = len(files)
+        if n_originais == 0: continue
 
-    label_encoder = LabelEncoder()
-    label_encoder.classes_ = np.array([0, 1])
-    labels_encoded = label_encoder.transform(all_labels)
-    labels_one_hot = to_categorical(labels_encoded, num_classes=len([0, 1])).astype(np.float16) 
-    
-    # Shuffle agora inclui as flags para manter a sincronia
-    all_paths_shuffled, labels_one_hot_shuffled, flags_shuffled = shuffle(
-        all_paths, labels_one_hot, all_transform_flags, random_state=42
-    )
-    
-    del all_labels, labels_encoded, labels_one_hot, all_transform_flags, all_paths
-    gc.collect()
-
-    if not all_paths_shuffled:
-        print("Nenhuma imagem encontrada.")
-        return np.array([]), np.array([]), [], label_encoder.classes_
-
-    print("Passo 2: Determinando o shape da imagem...")
-    try:
-        first_img_nib = nib.load(all_paths_shuffled[0])
-        img_shape = first_img_nib.get_fdata(dtype=np.float16).shape
-    except Exception as e:
-        print(f"Erro ao carregar a primeira imagem: {e}")
-        return
-
-    total_images = len(all_paths_shuffled)
-    print(f"Shape detectado: {img_shape}. Alocando memória para {total_images} imagens...")
-    
-    images_final = np.empty((total_images, *img_shape, 1), dtype=np.float16)
-    paths_final = [None] * total_images
-
-    print("Passo 3: Carregando e transformando imagens...")
-    for i in range(total_images):
-        img_path = all_paths_shuffled[i]
-        should_transform = flags_shuffled[i] # Verifica a flag individual
+        copies_per_img = math.ceil(target_per_class / n_originais) if augment else 1
         
+        count_final_classe = 0
+        for fname in files:
+            if count_final_classe >= target_per_class: break
+            path = os.path.join(label_dir, fname)
+            
+            for c in range(copies_per_img):
+                if count_final_classe >= target_per_class: break
+                
+                is_augmentation = False if c == 0 else (random.random() < transform_probability)
+                # guarda o index da classe para o label
+                all_info.append((path, idx, is_augmentation))
+                count_final_classe += 1
+
+    random.shuffle(all_info)
+    
+    # alocacao de memoria e processamento
+    total = len(all_info)
+    if total == 0: return None
+    
+    first_nib = nib.load(all_info[0][0])
+    shape = first_nib.header.get_data_shape()
+    
+    imgs = np.empty((total, *shape, 1), dtype=np.float16)
+    
+    # Array de labels SEMPRE em formato One-Hot Encoding (N, num_classes)
+    labels = np.zeros((total, num_classes), dtype=np.float16)
+        
+    paths = []
+
+    for i, (path, class_idx, should_tf) in enumerate(all_info):
         try:
-            img_nib = nib.load(img_path)
-            img_data_f16 = img_nib.get_fdata(dtype=np.float16)
+            data = nib.load(path).get_fdata(dtype=np.float32)
+            if should_tf and composer:
+                sub = tio.Subject(mri=tio.ScalarImage(tensor=data[np.newaxis,...], affine=first_nib.affine))
+                data = composer(sub).mri.data.numpy().squeeze(axis=0)
+
+            imgs[i] = data[..., np.newaxis].astype(np.float16)
             
-            img_final = None
-
-            # Só aplica transformação se a flag for True (e augment estiver ligado globalmente)
-            if should_transform and transform_composer:
-                # Conversão necessária para TorchIO (Float32 e canal de dimensão)
-                img_data_f32 = img_data_f16.astype(np.float32)
+            # Preenchimento garantido em One-Hot Encoding
+            labels[i, class_idx] = 1.0
                 
-                subject = tio.Subject(
-                    mri=tio.ScalarImage(tensor=img_data_f32[np.newaxis, ...], affine=img_nib.affine)
-                )
-
-                transformed_subject = transform_composer(subject)
-                
-                transformed_data_f32 = transformed_subject.mri.data.numpy().squeeze(axis=0)
-                img_final = transformed_data_f32.astype(np.float16)
-                
-                del img_data_f32, subject, transformed_subject, transformed_data_f32
-            else:
-                # Caso seja para manter original
-                img_final = img_data_f16
-            
-            images_final[i] = img_final.reshape((*img_shape, 1))
-            paths_final[i] = img_path
-
+            paths.append(path)
         except Exception as e:
-            print(f"Erro em {img_path}: {e}. Inserindo array vazio.")
-            images_final[i] = np.zeros((*img_shape, 1), dtype=np.float16)
-            paths_final[i] = img_path
-        
-        if (i + 1) % 50 == 0:
-            gc.collect()
-            print(f"Processado {i + 1}/{total_images}...")
-            
-    print("Passo 4: Carregamento concluído.")
-    return images_final, labels_one_hot_shuffled, paths_final, label_encoder.classes_
+            imgs[i] = 0
+            print(f"Erro em {path}: {e}")
 
+    return imgs, labels, paths, np.array(class_names)
+
+def load_nifti_data_from_multiple_sources(
+    base_dirs, class_names, augment=False, target_per_class=1000, 
+    include_intensity=True, transform_probability=1.0
+):
+    # configuracao do tio.composer
+    composer = None
+    if augment:
+        spatial = tio.Compose([
+            tio.RandomAffine(scales=(0.9, 1.1), degrees=10, isotropic=True, p=0.75),
+            tio.RandomElasticDeformation(num_control_points=7, max_displacement=7.5, locked_borders=2, p=0.15)
+        ])
+        intensity = tio.OneOf({tio.RandomBiasField(): 0.5, tio.RandomGhosting(): 0.2, 
+                               tio.RandomMotion(): 0.2, tio.RandomNoise(): 0.1}, p=0.5) if include_intensity else None
+        composer = tio.Compose([spatial, intensity]) if intensity else spatial
+
+    num_classes = len(class_names)
+    all_info = []
+
+    # mapeamento de arquivos em todos os diretorios base
+    for idx, label in enumerate(class_names):
+        class_files_pool = []
+        for b_dir in base_dirs:
+            label_path = os.path.join(b_dir, label)
+            if os.path.exists(label_path):
+                # armazena tupla (caminho_completo, index_classe)
+                paths = [os.path.join(label_path, f) for f in sorted(os.listdir(label_path))]
+                class_files_pool.extend(paths)
+                print(f"{len(paths)} arquivos no diretorio {label} - {b_dir}")
+
+        n_originais = len(class_files_pool)
+        if n_originais == 0: continue
+
+        # calculo de copias baseado no total acumulado das fontes
+        copies_per_img = math.ceil(target_per_class / n_originais) if augment else 1
+        
+        count_final_classe = 0
+        for path in class_files_pool:
+            if count_final_classe >= target_per_class: break
+            
+            for c in range(copies_per_img):
+                if count_final_classe >= target_per_class: break
+                
+                is_augmentation = False if c == 0 else (random.random() < transform_probability)
+                all_info.append((path, idx, is_augmentation))
+                count_final_classe += 1
+
+    random.shuffle(all_info)
+    
+    # alocacao e processamento
+    total = len(all_info)
+    if total == 0: return None
+    
+    first_nib = nib.load(all_info[0][0])
+    shape = first_nib.header.get_data_shape()
+    affine = first_nib.affine
+    
+    imgs = np.empty((total, *shape, 1), dtype=np.float16)
+    
+    # ARRAY DE LABELS AJUSTADO PARA SEMPRE SER (N, num_classes)
+    labels = np.zeros((total, num_classes), dtype=np.float16)
+    paths_out = []
+
+    for i, (path, class_idx, should_tf) in enumerate(all_info):
+        try:
+            data = nib.load(path).get_fdata(dtype=np.float32)
+            if should_tf and composer:
+                sub = tio.Subject(mri=tio.ScalarImage(tensor=data[np.newaxis,...], affine=affine))
+                data = composer(sub).mri.data.numpy().squeeze(axis=0)
+
+            imgs[i] = data[..., np.newaxis].astype(np.float16)
+            
+            # ATRIBUIÇÃO ONE-HOT GARANTIDA
+            labels[i, class_idx] = 1.0
+                
+            paths_out.append(path)
+        except Exception as e:
+            imgs[i] = 0
+            print(f"Erro em {path}: {e}")
+
+    return imgs, labels, paths_out, np.array(class_names)
+
+# def load_nifti_data_balanced_preallocated(
+#     base_dir, 
+#     class_names, 
+#     augment=False, 
+#     target_per_class=1000, 
+#     augmentation_factor=1,       
+#     include_intensity=True,      
+#     transform_probability=1.0    
+# ):
+#     if augmentation_factor < 1:
+#         augmentation_factor = 1
+
+#     # ==============================================================================
+#     # CONFIGURAÇÃO DE AUGMENTATION (TorchIO)
+#     # ==============================================================================
+#     transform_composer = None
+#     if augment:        
+#         spatial_transforms = tio.Compose([
+#             tio.RandomAffine(scales=(0.9, 1.1), degrees=10, isotropic=True, p=0.75),
+#             tio.RandomElasticDeformation(num_control_points=7, max_displacement=7.5, locked_borders=2, p=0.15)
+#         ])
+
+#         if include_intensity:
+#             artifact_transforms = tio.OneOf({
+#                 tio.RandomBiasField(): 0.5,
+#                 tio.RandomGhosting(): 0.2,
+#                 tio.RandomMotion(degrees=5, translation=5): 0.2,
+#                 tio.RandomNoise(std=0.05): 0.2,
+#                 tio.RandomBlur(std=(0, 1)): 0.1,
+#             }, p=0.5)
+#             transform_composer = tio.Compose([spatial_transforms, artifact_transforms])
+#         else:
+#             transform_composer = spatial_transforms
+
+#     # ==============================================================================
+#     # FASE 1: DESCOBERTA
+#     # ==============================================================================
+#     print("Passo 1: Analisando diretórios...")
+#     class_files = {}
+#     max_count = 0
+
+#     for label in class_names:
+#         label_dir = os.path.join(base_dir, label)
+#         names = sorted(os.listdir(label_dir)) # Ordenação para consistência
+        
+#         if len(names) > target_per_class:
+#             names = names[:target_per_class]
+            
+#         class_files[label] = names
+#         count = len(names)
+#         if count > max_count: max_count = count
+#         print(f"   > Classe '{label}': {count} originais.")
+
+#     target_final_count = max_count * augmentation_factor
+#     print(f"   > Alvo final: ~{target_final_count} por classe.")
+
+#     # ==============================================================================
+#     # FASE 2: PLANEJAMENTO (AJUSTADO PARA MANTER ORIGINAIS)
+#     # ==============================================================================
+#     all_paths = []
+#     all_labels = []
+#     all_transform_flags = [] 
+
+#     for label in class_names:
+#         files = class_files[label]
+#         n_files = len(files)
+#         if n_files == 0: continue
+
+#         # Quantas cópias totais cada imagem terá para atingir o alvo da classe
+#         copies_per_image = math.ceil(target_final_count / n_files)
+        
+#         # Se augment=False, forçamos apenas 1 cópia (a original)
+#         if not augment:
+#             copies_per_image = 1
+
+#         print(f"   > '{label}': 1 original + {copies_per_image-1} possíveis aumentos por imagem.")
+
+#         for fname in files:
+#             full_path = os.path.join(base_dir, label, fname)
+            
+#             # --- Lógica de Flags ---
+#             # A primeira cópia (índice 0) é SEMPRE False (Original)
+#             flags_to_add = [False]
+            
+#             # As cópias subsequentes seguem o augmentation_factor
+#             for c in range(1, copies_per_image):
+#                 if augment and random.random() < transform_probability:
+#                     flags_to_add.append(True)  # Será transformada
+#                 else:
+#                     flags_to_add.append(False) # Será uma cópia simples da original
+            
+#             for should_transform in flags_to_add:
+#                 all_paths.append(full_path)
+#                 all_transform_flags.append(should_transform)
+#                 # Mapeamento binário simples
+#                 all_labels.append(0 if label in ['cn', '0.0', '0', 0, 'CN'] else 1)
+
+#     # Codificação e Shuffle
+#     label_encoder = LabelEncoder()
+#     label_encoder.fit([0, 1])
+#     labels_one_hot = to_categorical(label_encoder.transform(all_labels), num_classes=2).astype(np.float16)
+    
+#     all_paths_shuffled, labels_one_hot_shuffled, flags_shuffled = shuffle(
+#         all_paths, labels_one_hot, all_transform_flags, random_state=42
+#     )
+    
+#     del all_labels, all_paths, all_transform_flags
+#     gc.collect()
+
+#     # ==============================================================================
+#     # FASE 3: CARREGAMENTO (IDÊNTICO AO ANTERIOR, MAS OTIMIZADO)
+#     # ==============================================================================
+#     print(f"Passo 2: Alocando para {len(all_paths_shuffled)} imagens...")
+#     first_img_nib = nib.load(all_paths_shuffled[0])
+#     img_shape = first_img_nib.header.get_data_shape() # Mais rápido que get_fdata
+    
+#     total_images = len(all_paths_shuffled)
+#     images_final = np.empty((total_images, *img_shape, 1), dtype=np.float16)
+#     paths_final = [None] * total_images
+
+#     for i in range(total_images):
+#         img_path = all_paths_shuffled[i]
+#         should_transform = flags_shuffled[i] 
+        
+#         try:
+#             img_nib = nib.load(img_path)
+#             # Carrega direto em float16 para economizar pico de RAM
+#             img_data = img_nib.get_fdata(dtype=np.float32) 
+            
+#             if should_transform and transform_composer:
+#                 subject = tio.Subject(
+#                     mri=tio.ScalarImage(tensor=img_data[np.newaxis, ...], affine=img_nib.affine)
+#                 )
+#                 transformed = transform_composer(subject)
+#                 img_final = transformed.mri.data.numpy().squeeze(axis=0).astype(np.float16)
+#             else:
+#                 img_final = img_data.astype(np.float16)
+            
+#             images_final[i] = img_final[..., np.newaxis]
+#             paths_final[i] = img_path
+
+#         except Exception as e:
+#             print(f"\nErro em {img_path}: {e}")
+#             images_final[i] = np.zeros((*img_shape, 1), dtype=np.float16)
+        
+#         if (i + 1) % 50 == 0:
+#             print(f"Progresso: {i + 1}/{total_images}", end='\r')
+            
+#     print(f"\nConcluído. Carregadas {len(images_final)} imagens.")
+
+#     return images_final, labels_one_hot_shuffled, paths_final, label_encoder.classes_
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Função geradora para ser passada durante o treinamento

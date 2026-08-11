@@ -1,0 +1,105 @@
+Experiment,Metric,mean,std,n
+12n - geometry,0_f1-score,0.754,0.2646318197042827,5
+12n - geometry,0_precision,0.978,0.031937438845342614,5
+12n - geometry,0_recall,0.674,0.3076198953253837,5
+12n - geometry,1_f1-score,0.5740000000000001,0.18514858897652986,5
+12n - geometry,1_precision,0.47800000000000004,0.24180570712867802,5
+12n - geometry,1_recall,0.9,0.14815532390029054,5
+12n - geometry,accuracy,0.71,0.24779023386727736,5
+12n - geometry,macro avg_f1-score,0.662,0.22095248357961492,5
+12n - geometry,macro avg_precision,0.726,0.10644247272588138,5
+12n - geometry,macro avg_recall,0.786,0.11970797801316341,5
+12n - geometry,weighted avg_f1-score,0.7220000000000001,0.24793144213673265,5
+12n - geometry,weighted avg_precision,0.8960000000000001,0.019493588689617966,5
+12n - geometry,weighted avg_recall,0.708,0.24863628053846046,5
+12n - geometry + intensity,0_f1-score,0.9019999999999999,0.03492849839314598,5
+12n - geometry + intensity,0_precision,0.9400000000000001,0.03082207001484487,5
+12n - geometry + intensity,0_recall,0.8720000000000001,0.08843076387773653,5
+12n - geometry + intensity,1_f1-score,0.61,0.11045361017187261,5
+12n - geometry + intensity,1_precision,0.6,0.22360679774997896,5
+12n - geometry + intensity,1_recall,0.698,0.19408760908414524,5
+12n - geometry + intensity,accuracy,0.8480000000000001,0.05215361924162118,5
+12n - geometry + intensity,macro avg_f1-score,0.758,0.06457553716385174,5
+12n - geometry + intensity,macro avg_precision,0.772,0.1114450537260403,5
+12n - geometry + intensity,macro avg_recall,0.784,0.06985699678629191,5
+12n - geometry + intensity,weighted avg_f1-score,0.852,0.04381780460041331,5
+12n - geometry + intensity,weighted avg_precision,0.876,0.03974921382870357,5
+12n - geometry + intensity,weighted avg_recall,0.8480000000000001,0.05215361924162118,5
+4n - geometry,0_f1-score,0.914,0.029664793948382655,5
+4n - geometry,0_precision,0.8939999999999999,0.02509980079602228,5
+4n - geometry,0_recall,0.9339999999999999,0.028809720581775857,5
+4n - geometry,1_f1-score,0.514,0.1489295135290517,5
+4n - geometry,1_precision,0.5900000000000001,0.1746424919657298,5
+4n - geometry,1_recall,0.45999999999999996,0.13209844813622906,5
+4n - geometry,accuracy,0.852,0.045497252664309304,5
+4n - geometry,macro avg_f1-score,0.716,0.08532291603080615,5
+4n - geometry,macro avg_precision,0.742,0.09497368056467011,5
+4n - geometry,macro avg_recall,0.6940000000000001,0.07765307463326872,5
+4n - geometry,weighted avg_f1-score,0.8480000000000001,0.04764451699828639,5
+4n - geometry,weighted avg_precision,0.842,0.0521536192416212,5
+4n - geometry,weighted avg_recall,0.852,0.045497252664309304,5
+4n - geometry + intensity,0_f1-score,0.916,0.048785243670601906,5
+4n - geometry + intensity,0_precision,0.9,0.04636809247747854,5
+4n - geometry + intensity,0_recall,0.9339999999999999,0.055045435778091546,5
+4n - geometry + intensity,1_f1-score,0.532,0.26612027356065904,5
+4n - geometry + intensity,1_precision,0.6,0.28089143810376277,5
+4n - geometry + intensity,1_recall,0.48600000000000004,0.257740179250345,5
+4n - geometry + intensity,accuracy,0.86,0.07968688725254612,5
+4n - geometry + intensity,macro avg_f1-score,0.724,0.15709869509324387,5
+4n - geometry + intensity,macro avg_precision,0.75,0.1615549442140351,5
+4n - geometry + intensity,macro avg_recall,0.7100000000000001,0.15000000000000002,5
+4n - geometry + intensity,weighted avg_f1-score,0.852,0.08228000972289683,5
+4n - geometry + intensity,weighted avg_precision,0.85,0.08426149773176357,5
+4n - geometry + intensity,weighted avg_recall,0.86,0.07968688725254612,5
+8n - geometry,0_f1-score,0.924,0.024083189157584596,5
+8n - geometry,0_precision,0.914,0.030495901363953817,5
+8n - geometry,0_recall,0.9339999999999999,0.028809720581775854,5
+8n - geometry,1_f1-score,0.5980000000000001,0.1186170308176697,5
+8n - geometry,1_precision,0.646,0.09864076236526155,5
+8n - geometry,1_recall,0.5660000000000001,0.16364595931461307,5
+8n - geometry,accuracy,0.874,0.039115214431215926,5
+8n - geometry,macro avg_f1-score,0.76,0.07211102550927978,5
+8n - geometry,macro avg_precision,0.78,0.06363961030678929,5
+8n - geometry,macro avg_recall,0.748,0.08348652585896718,5
+8n - geometry,weighted avg_f1-score,0.866,0.03847076812334272,5
+8n - geometry,weighted avg_precision,0.868,0.04147288270665548,5
+8n - geometry,weighted avg_recall,0.874,0.039115214431215926,5
+8n - geometry + intensity,0_f1-score,0.932,0.03114482300479483,5
+8n - geometry + intensity,0_precision,0.9359999999999999,0.03911521443121586,5
+8n - geometry + intensity,0_recall,0.9339999999999999,0.05504543577809157,5
+8n - geometry + intensity,1_f1-score,0.658,0.2247665455533808,5
+8n - geometry + intensity,1_precision,0.688,0.19357169214531342,5
+8n - geometry + intensity,1_recall,0.666,0.2687563952727451,5
+8n - geometry + intensity,accuracy,0.89,0.05244044240850758,5
+8n - geometry + intensity,macro avg_f1-score,0.796,0.12601587201618691,5
+8n - geometry + intensity,macro avg_precision,0.812,0.11099549540409284,5
+8n - geometry + intensity,macro avg_recall,0.8,0.12884098726725127,5
+8n - geometry + intensity,weighted avg_f1-score,0.8859999999999999,0.05941380311005177,5
+8n - geometry + intensity,weighted avg_precision,0.8939999999999999,0.05856620185738527,5
+8n - geometry + intensity,weighted avg_recall,0.89,0.05244044240850758,5
+n - geometry,0_f1-score,0.9179999999999999,0.0268328157299975,5
+n - geometry,0_precision,0.898,0.024899799195977464,5
+n - geometry,0_recall,0.9400000000000001,0.030822070014844855,5
+n - geometry,1_f1-score,0.532,0.10545141061171252,5
+n - geometry,1_precision,0.634,0.14501724035437993,5
+n - geometry,1_recall,0.466,0.10382677881933926,5
+n - geometry,accuracy,0.8620000000000001,0.04024922359499621,5
+n - geometry,macro avg_f1-score,0.722,0.060991802727907635,5
+n - geometry,macro avg_precision,0.762,0.07823042886243177,5
+n - geometry,macro avg_recall,0.702,0.05890670590009257,5
+n - geometry,weighted avg_f1-score,0.852,0.04086563348340509,5
+n - geometry,weighted avg_precision,0.85,0.045276925690687087,5
+n - geometry,weighted avg_recall,0.8620000000000001,0.04024922359499621,5
+n - geometry + intensity,0_f1-score,0.914,0.021908902300206617,5
+n - geometry + intensity,0_precision,0.874,0.015165750888103098,5
+n - geometry + intensity,0_recall,0.962,0.024899799195977446,5
+n - geometry + intensity,1_f1-score,0.42799999999999994,0.10034938963441681,5
+n - geometry + intensity,1_precision,0.6679999999999999,0.20413231003444804,5
+n - geometry + intensity,1_recall,0.318,0.07259476565152614,5
+n - geometry + intensity,accuracy,0.8539999999999999,0.03361547262794325,5
+n - geometry + intensity,macro avg_f1-score,0.674,0.05813776741499453,5
+n - geometry + intensity,macro avg_precision,0.77,0.11022703842524297,5
+n - geometry + intensity,macro avg_recall,0.642,0.04324349662087932,5
+n - geometry + intensity,weighted avg_f1-score,0.8320000000000001,0.034928498393145956,5
+n - geometry + intensity,weighted avg_precision,0.8380000000000001,0.047644516998286396,5
+n - geometry + intensity,weighted avg_recall,0.8539999999999999,0.03361547262794325,5
