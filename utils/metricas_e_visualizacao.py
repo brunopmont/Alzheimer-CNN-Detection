@@ -5,7 +5,7 @@ import numpy as np
 import math
 import nibabel as nib
 
-from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc, roc_auc_score
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils import shuffle
 
@@ -32,12 +32,12 @@ import random
 from tensorflow.keras import backend as K
 
 # realizar predições e armazenar em um vetor
-def get_predictions(images, labels, batch_size, best_model):
+def get_predictions(images, labels, batch_size, best_model, save_dir=None, fold_num=1):
     pred = []
 
     for i in range(0, len(images), batch_size):
         final = min(i + batch_size, len(images))
-        
+
         # Fazendo predição para o lote atual
         batch_pred = best_model.predict(images[i:final])
         pred.append(batch_pred)
@@ -48,9 +48,25 @@ def get_predictions(images, labels, batch_size, best_model):
     # Convertendo as predições para rótulos (a classe com maior probabilidade)
     true_labels = np.argmax(labels, axis=1)
     pred_labels = np.argmax(pred, axis=1)
+
+    if save_dir is not None:
+        save_predictions(true_labels, pred_labels, save_dir, fold_num)
+
     return pred_labels, true_labels, pred
 
+def save_predictions(y_true, y_pred, directory, fold_num):
+    os.makedirs(directory, exist_ok=True)
+    # Salvar as predições em um arquivo .npy
+    np.save(os.path.join(directory, f"y_true_fold_{fold_num}.npy"), y_true)
+    np.save(os.path.join(directory, f"y_pred_fold_{fold_num}.npy"), y_pred)
+    print(f"   Predições salvas em: {directory}")
+
 def plot_training_history(history, dir, title='training_history.png'):
+    # a chave da acurácia muda conforme a métrica usada no compile
+    # (accuracy, categorical_accuracy, binary_accuracy, ...)
+    acc_key = next((k for k in history.history
+                    if k.endswith('accuracy') and not k.startswith('val_')), None)
+
     plt.figure(figsize=(12, 4))
 
     # Plot Loss
@@ -63,19 +79,21 @@ def plot_training_history(history, dir, title='training_history.png'):
     plt.legend()
 
     # Plot Accuracy
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Accuracy Graphic')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.legend()
+    if acc_key:
+        plt.subplot(1, 2, 2)
+        plt.plot(history.history[acc_key], label='Training Accuracy')
+        plt.plot(history.history['val_' + acc_key], label='Validation Accuracy')
+        plt.title('Accuracy Graphic')
+        plt.xlabel('Epochs')
+        plt.ylabel('Accuracy')
+        plt.legend()
 
     plt.savefig(os.path.join(dir, title))
 
     plt.show()
+    plt.close()
 
-def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names):
+def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names, title=None):
     cm = confusion_matrix(y_true, y_pred)
 
     # Plotando a matriz de confusão
@@ -83,9 +101,10 @@ def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names):
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names,  annot_kws={"size": 14})
     plt.xlabel('Previsões')
     plt.ylabel('Valores Reais')
-    plt.title(f'Matriz de Confusão - {subset}')
+    plt.title(f'Matriz de Confusão - {title or subset}')
     plt.savefig(f'{dir}/{subset}_confusion_matrix.png')
     plt.show()
+    plt.close()
 
 def save_confusion_matrix(y_true, y_pred, directory, fold_num):
     cm = confusion_matrix(y_true, y_pred)
@@ -99,6 +118,48 @@ def save_confusion_matrix(y_true, y_pred, directory, fold_num):
     plt.savefig(save_path)
     plt.close()
     print(f"   Matriz de confusão salva em: {save_path}")
+
+def plot_roc_curve(y_true, y_probs, output_dir, mode, title):
+    if len(y_true.shape) > 1 and y_true.shape[1] > 1:
+        y_true = np.argmax(y_true, axis=1)
+
+    if len(y_probs.shape) > 1 and y_probs.shape[1] > 1:
+        y_probs = y_probs[:, 1]
+
+    fpr, tpr, _ = roc_curve(y_true, y_probs)
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.4f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xticks(fontsize=15)
+    plt.yticks(fontsize=15)
+    plt.xlabel('False Positive Rate', fontsize=18)
+    plt.ylabel('True Positive Rate', fontsize=18)
+    plt.title(f'Receiver Operating Characteristic ({title})', fontsize=24)
+    plt.legend(loc="lower right", fontsize=15)
+
+    plt.savefig(os.path.join(output_dir, f'roc_curve_{mode}.png'))
+    plt.show()
+    plt.close()
+
+    print(f"AUC ({mode}): {roc_auc:.4f}")
+
+def save_auc(test_pred, test_true_labels, results_dir, subset):
+    if len(test_pred.shape) > 1 and test_pred.shape[1] > 1:
+        y_probs = test_pred[:, 1]
+    else:
+        y_probs = test_pred
+
+    auc_value = roc_auc_score(test_true_labels, y_probs)
+
+    # Salvar o valor em um arquivo de texto
+    with open(os.path.join(results_dir, f"{subset}_auc.txt"), "w") as f:
+        f.write(f"AUC Score: {auc_value:.4f}")
+
+    print(f"AUC: {auc_value:.4f}")
 
 def get_classification_report(y_true, y_pred, dir, subset):
     report = classification_report(y_true, y_pred)
@@ -400,28 +461,3 @@ def get_predictions_binary(images, labels, batch_size, best_model):
         true_labels = labels.astype("int32").flatten()
 
     return pred_labels, true_labels, pred
-
-def plot_training_history_binary(history, dir, title='training_history.png'):
-    plt.figure(figsize=(12, 4))
-
-    # Plot Loss
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['loss'], label='Training Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Loss Graphic')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    # Plot Accuracy
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Accuracy Graphic')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.legend()
-
-    plt.savefig(os.path.join(dir, title))
-
-    plt.show()

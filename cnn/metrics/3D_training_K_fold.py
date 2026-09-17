@@ -31,6 +31,13 @@ from PIL import Image
 import tempfile
 from math import ceil
 
+import sys
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+import utils.metricas_e_visualizacao as met_vil
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 tf.get_logger().setLevel('ERROR')
@@ -47,38 +54,6 @@ if gpus:
 
 # FUNÇÕES
 
-# Função para carregar imagens NIfTI, seus rótulos e cortar as imagens
-def load_nifti_paths(base_dir, class_names):
-    image_paths = []
-    labels = []
-    
-    # Caminhos das subpastas
-    for label in class_names:
-        label_dir = os.path.join(base_dir, label)
-        for fname in os.listdir(label_dir):
-            img_path = os.path.join(label_dir, fname)
-            image_paths.append(img_path)
-            labels.append(label)
-
-    # Codificando os rótulos
-    label_encoder = LabelEncoder()
-
-    # Inverter a ordem das classes explicitamente
-    label_encoder.classes_ = np.array(class_names)
-
-    # Convertendo a lista de rótulos para um array NumPy
-    labels_array = np.array(labels)
-
-    # Codificando os rótulos (agora 'cn' será 0 e 'ad' será 1)
-    labels_encoded = label_encoder.transform(labels_array)
-
-    # Transformando os rótulos para one-hot encoding
-    labels_one_hot = to_categorical(labels_encoded, num_classes=len(class_names))
-
-    # Embaralhar os dados
-    image_paths, labels_one_hot = shuffle(image_paths, labels_one_hot, random_state=42)
-
-    return image_paths, labels_one_hot, label_encoder.classes_
 
 def load_nifti_data_balanced(base_dir, class_names, target=None):
     images = []
@@ -121,12 +96,6 @@ def load_nifti_data_balanced(base_dir, class_names, target=None):
 
     return images, labels_one_hot, paths, label_encoder.classes_
 
-def nifti_data_generator_3d(images_array, labels, batch_size):
-    total_n = len(images_array)
-    while True:
-        for i in range(0, total_n, batch_size):
-            final = min(i + batch_size, total_n)
-            yield images_array[i:final], labels[i:final]
             
 def nifti_data_generator_3d_indexed(full_images, full_labels, index_list, batch_size):
     while True:
@@ -135,195 +104,12 @@ def nifti_data_generator_3d_indexed(full_images, full_labels, index_list, batch_
             yield full_images[batch_idx], full_labels[batch_idx]
 
 
-# Função para carregar imagens NIfTI, seus rótulos e cortar as imagens
-def nifti_data_generator_3d_path(image_paths, labels, batch_size, size):
-    cache_size = batch_size*size
-    while True:
-        for i in range(0, len(image_paths), cache_size):
-            final = min(i + cache_size, len(image_paths))
-            batch_paths = image_paths[i:final]
-            batch_labels = labels[i:final]
-            images = []
 
-            for path in batch_paths:
-                # Carregar a imagem NIfTI e garantir o formato correto
-                img = nib.load(path).get_fdata(dtype=np.float16)  # Shape original: 
-                img = img[..., np.newaxis]       # Adicionar a dimensão do canal: 
-                images.append(img)
-            
-            # Converter lista para array NumPy e garantir o shape correto
-            images = np.array(images) 
-            batch_labels = np.array(batch_labels)
 
-            # Liberar memória
-            gc.collect()
-            
-            yield images, batch_labels
 
-# realizar predições e armazenar em um vetor
-def get_predictions(images, labels, batch_size, best_model):
-    pred = []
 
-    for i in range(0, len(images), batch_size):
-        final = min(i + batch_size, len(images))
-        
-        # Fazendo predição para o lote atual
-        batch_pred = best_model.predict(images[i:final])
-        pred.append(batch_pred)
 
-    # Concatenando as predições e os rótulos verdadeiros
-    pred = np.concatenate(pred)
 
-    # Convertendo as predições para rótulos (a classe com maior probabilidade)
-    true_labels = np.argmax(labels, axis=1)
-    pred_labels = np.argmax(pred, axis=1)
-    return true_labels, pred_labels, pred
-
-def plot_training_history(history, dir):
-    plt.figure(figsize=(12, 4))
-
-    # Plot Loss
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['loss'], label='Training Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Loss Graphic')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    # Plot Accuracy
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['categorical_accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_categorical_accuracy'], label='Validation Accuracy')
-    plt.title('Accuracy Graphic')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.legend()
-
-    plt.savefig(os.path.join(dir, 'training_history.png'))
-
-    #plt.show()
-    plt.close('all')
-
-def plot_confusion_matrix(y_true, y_pred, dir, subset, class_names, comp=''):
-    # Calcular a matriz de confusão
-    cm = confusion_matrix(y_true, y_pred)
-
-    # Plotando a matriz de confusão
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names,  annot_kws={"size": 14})
-    plt.xlabel('Previsões')
-    plt.ylabel('Valores Reais')
-    plt.title(f'Matriz de Confusão{comp}')
-    plt.savefig(f'{dir}/{subset}_confusion_matrix.png')
-    #plt.show()
-    plt.close('all')
-
-def get_classification_report(y_true, y_pred, dir, subset):
-    # Gerar relatório
-    report = classification_report(y_true, y_pred)
-    print(report)
-
-    # Escrevendo o relatório em um arquivo .txt
-    with open(os.path.join(dir, f"{subset}_classification_report.txt"), "w") as file:
-        file.write(report)
-
-# Função para carregar uma imagem NIfTI e extrair uma fatia específica do eixo Z
-def load_nifti_image_pdf(file_path):
-    img = nib.load(file_path) 
-    data = img.get_fdata(dtype=np.float16)  
-    slice_2d = data[2, :, :]
-
-    # implementar lógica de retornar vetor com cada fatia como imagem única
-
-    return slice_2d
-
-# Função para criar o PDF
-def create_pdf(y_paths, y_images, y_true_labels, y_pred_labels, y_pred, output_pdf_path, class_names):
-    c = canvas.Canvas(output_pdf_path, pagesize=letter)
-    width, height = letter  # Dimensões da página no PDF
-
-    #for image, name in zip(y_images, y_paths):
-    for i in range(0, len(y_images)):
-        true = ''
-        pred = ''
-        # Carregar a imagem NIfTI e obter a fatia 2D no eixo Z
-        # nifti_image = load_nifti_image_pdf(item)
-        nifti_image = y_images[i][:, :, 88, 0]
-
-        # Converter a fatia 2D para uma imagem 8-bit (grayscale) para visualização
-        img = Image.fromarray(np.uint8(nifti_image / np.max(nifti_image) * 255))  # Normalizar e converter
-        img = img.convert("RGB")  # Garantir que a imagem tenha 3 canais (RGB)
-
-        # Redimensionar a imagem para se ajustar ao tamanho da página
-        img_width, img_height = img.size
-        aspect_ratio = img_height / float(img_width)
-        new_width = width * 0.2  # Definir largura como 80% da largura da página
-        new_height = new_width * aspect_ratio
-        img = img.resize((int(new_width), int(new_height)))
-
-        # Criar um arquivo temporário para salvar a imagem
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
-            temp_file_path = temp_file.name
-            img.save(temp_file_path)
-
-        # configurar para printar as 7 fatias em uma página inteira, com as informações de label predito e esperado
-
-        # Colocar a imagem no PDF usando o caminho temporário
-        if i % 12 < 4:
-            x = 80
-        elif i % 12 < 8:
-            x = width - 2.35*new_width - 80
-        else:
-            x = width - new_width - 80
-
-        y = height - (new_height + 80)*((i%4)+1)
-
-        c.drawImage(temp_file_path, x, y, width=new_width, height=new_height)
-
-        # Escrever os rótulos
-        true_label = y_true_labels[i]
-        pred_label = y_pred_labels[i]
-
-        #ver como transformar os labels de maneira inteligente
-        true = class_names[true_label]
-        pred = class_names[pred_label]
-
-        # Definir a cor para os rótulos
-        if true_label == pred_label:
-            pred_color = (0, 1, 0)  # Verde
-        else:
-            pred_color = (1, 0, 0)  # Vermelho
-        
-        #Nome paciente (em preto)
-        c.setFont("Helvetica", 12)
-        c.setFillColorRGB(0, 0, 0)  # Preto
-        c.drawString(x+24, y+new_height+50, f"{os.path.basename(y_paths[i])}")
-
-        # Rótulo esperado (em preto)
-        c.setFont("Helvetica", 12)
-        c.setFillColorRGB(0, 0, 0)  # Preto
-        c.drawString(x+26, y+new_height+35, f"Expected: {true}")
-
-        # Rótulo predito
-        c.setFont("Helvetica", 12)
-        c.setFillColorRGB(*pred_color)  # Verde ou Vermelho
-        c.drawString(x+26, y+new_height+20, f"Predicted: {pred}")
-
-        # Rótulo predito
-        c.setFont("Helvetica", 12)
-        c.setFillColorRGB(*pred_color)  # Verde ou Vermelho
-        c.drawString(x+26, y+new_height+5, f"Prob: {max(y_pred[i])*100:.2f}%")
-
-        # Avançar para a próxima imagem
-        i += 1
-        
-        # Adicionar uma nova página no PDF a cada 2 imagens (se necessário)
-        if i % 12 == 0:  # Por exemplo, a cada 2 imagens, adicionamos uma nova página
-            c.showPage()
-
-    # Salvar o PDF
-    c.save()
 
 def create_model_3d_seq(input_shape, n_classes):
     model = Sequential([        
@@ -371,7 +157,7 @@ def create_model_3d_seq(input_shape, n_classes):
     
     return model
 
-def create_model_3d(input_shape, n_classes):
+def create_model_3d_maxpool(input_shape, n_classes):
     inputs = Input(shape=input_shape)  # (D, H, W, C)
 
     # Camada 1
@@ -539,7 +325,7 @@ for i in range(0, size, step):
     print(f"\n\nINICIANDO FOLD {count}\n\n")
 
     # Compila modelo
-    model = create_model_3d(shape, n_classes)
+    model = create_model_3d_maxpool(shape, n_classes)
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss='categorical_crossentropy', metrics=['categorical_accuracy'])
     # initial_weights = model.get_weights()
 
@@ -599,20 +385,20 @@ for i in range(0, size, step):
     )
 
     # Plotando o histórico de treinamento após o treinamento
-    plot_training_history(history, results_fold)
+    met_vil.plot_training_history(history, results_fold)
 
     # Realizar predições para dados do conjunto validação
-    val_true_labels, val_pred_labels, val_pred = get_predictions(full_images[val_idx], full_labels[val_idx], batch_size, model)
+    val_pred_labels, val_true_labels, val_pred = met_vil.get_predictions(full_images[val_idx], full_labels[val_idx], batch_size, model)
 
     # Obter métricas da valiadação e salvá-las em um arquivo
-    get_classification_report(val_true_labels, val_pred_labels, results_fold, 'val')
+    met_vil.get_classification_report(val_true_labels, val_pred_labels, results_fold, 'val')
 
     # Obter matriz de confusão
-    plot_confusion_matrix(val_true_labels, val_pred_labels, results_fold, 'val', class_names, f'_fold_{count}')
+    met_vil.plot_confusion_matrix(val_true_labels, val_pred_labels, results_fold, 'val', class_names, f'fold {count}')
 
     # Criar pdf com predições
     val_pdf_path = os.path.join(results_fold, "validation_predictions.pdf")
-    create_pdf(val_paths, full_images[val_idx], val_true_labels, val_pred_labels, val_pred, val_pdf_path, class_names)
+    met_vil.create_pdf(val_paths, full_images[val_idx], val_true_labels, val_pred_labels, val_pred, val_pdf_path, class_names)
 
     model_checkpoint_callback = None
     csv_log = None
