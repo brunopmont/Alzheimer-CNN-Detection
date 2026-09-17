@@ -26,6 +26,15 @@ def load_dicom_series(input_folder):
     image = reader.Execute()
     return image
 
+def find_final_dir(dir_path):
+    if(os.path.isdir(dir_path)):
+        files = os.listdir(dir_path)
+        for file in files:
+            if file.endswith(".dcm"):
+                return dir_path
+        path = find_final_dir(os.path.join(dir_path, file))
+        return path
+
 def save_as_nifti(image, output_file):
     sitk.WriteImage(image, output_file)
 
@@ -61,53 +70,57 @@ def convert_dicom_to_nifti(input_folder, output_folder):
 if __name__ == "__main__":
 
     tot_images = 0
+    dcm_paths = []
 
-    DIR_BASE = os.path.abspath("/mnt/c/Users/Bruno/Desktop/IANS/ADNI/ADNI_3_4")
-    DIR_RAW = os.path.join("/mnt/c/Users/Bruno/Desktop/IANS/ADNI/ADNI_3_4_RAW")
-
+    DIR_BASE = os.path.abspath("/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/AIBL/AIBL")
+    DIR_RAW = os.path.join("/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/AIBL/AIBL_raw")
     os.makedirs(DIR_RAW, exist_ok=True)
 
     logging.info(f"Convertendo imagens de:\n{DIR_BASE}\npara:\n{DIR_RAW}")
 
+    for item in (os.listdir(DIR_BASE)):
+        item_path = find_final_dir(os.path.join(DIR_BASE, item))
+        if item_path != None:
+            dcm_paths.append(item_path)
+
     start_time = datetime.now()
     logging.info(f"Início do processamento em: {start_time}")
 
-    for group in ["cn", "mci", "ad"]:
-        logging.info(f"\nCONVERSOES DA PASTA {group}\n")
+    os.makedirs(DIR_RAW, exist_ok=True)
 
-        input_folder = os.path.join(DIR_BASE)
-        output_folder = os.path.join(DIR_RAW)
-        os.makedirs(output_folder, exist_ok=True)
+    already_converted = [os.path.basename(file) for file in os.listdir(os.path.join(DIR_RAW))]
+    dicom_paths = []
 
-        already_converted = [file for file in os.listdir(os.path.join(output_folder, group))]
-        dicom_folders = []
+    for item in dcm_paths:
+        if os.path.basename(item).rsplit('.dcm', 1)[0] not in already_converted:
+            dicom_paths.append(item)
 
-        # Coletar todas as pastas DICOM
-        for sub in tqdm(os.listdir(os.path.join(input_folder, group)), f"CARREGANDO: {group}"):
-            names = os.listdir(os.path.join(input_folder, group, sub))
-            datas = os.listdir(os.path.join(input_folder, group, sub, names[0]))
-            file = os.listdir(os.path.join(input_folder, group, sub, names[0], datas[0]))
-            file_path = os.path.join(input_folder, group, sub, names[0], datas[0], file[0])
-            if f"{os.path.basename(file_path)}.nii.gz" not in already_converted:
-                dicom_folders.append(file_path)
+    # Coletar todas as pastas DICOM
+    # for sub in tqdm(os.listdir(os.path.join(DIR_BASE)), f"CARREGANDO:"):
+    #     names = os.listdir(os.path.join(DIR_BASE, sub))
+    #     datas = os.listdir(os.path.join(DIR_BASE, sub, names[0]))
+    #     file = os.listdir(os.path.join(DIR_BASE, sub, names[0], datas[0]))
+    #     file_path = os.path.join(DIR_BASE, sub, names[0], datas[0], file[0])
+    #     if f"{os.path.basename(file_path)}.nii.gz" not in already_converted:
+    #         dicom_folders.append(file_path)
 
-        logging.info(f"IMAGENS PROCESSADAS: {len(already_converted)}\nIMAGENS A SEREM PROCESSADAS: {len(dicom_folders)}")
+    logging.info(f"IMAGENS PROCESSADAS: {len(already_converted)}\nIMAGENS A SEREM PROCESSADAS: {len(dicom_paths)}")
 
-        with ProcessPoolExecutor(16) as executor:
-            futures = {executor.submit(convert_dicom_to_nifti, folder, os.path.join(output_folder, group)): folder for folder in dicom_folders}
-            
-            for future in futures:
-                try:
-                    future.result()  # Relata erros
-                except Exception as e:
-                    logging.error(f"Erro ao processar {futures[future]}: {e}")
+    with ProcessPoolExecutor(32) as executor:
+        futures = {executor.submit(convert_dicom_to_nifti, folder, os.path.join(DIR_RAW)): folder for folder in dicom_paths}
+        
+        for future in futures:
+            try:
+                future.result()  # Relata erros
+            except Exception as e:
+                logging.error(f"Erro ao processar {futures[future]}: {e}")
 
-        tot_images += len(dicom_folders)
+    tot_images += len(dicom_paths)
 
-        logging.info(f'\nForam convertidas {len(dicom_folders)} imagens!')
+    logging.info(f'\nForam convertidas {len(dicom_paths)} imagens!')
 
     # Fim do processamento
-    logging.info(f'\nForam convertidas {len(dicom_folders)} imagens!')
+    logging.info(f'\nForam convertidas {len(dicom_paths)} imagens!')
     end_time = datetime.now()
     logging.info(f"Término do processamento em: {end_time}")
     logging.info(f"Duração total: {end_time - start_time}")

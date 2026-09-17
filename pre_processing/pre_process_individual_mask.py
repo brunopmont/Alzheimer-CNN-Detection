@@ -14,6 +14,13 @@ import tensorflow as tf
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Desativa GPUs
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Supressão de logs detalhados do TensorFlow
 
+# CONFIGURAÇÕES DO LOG
+logging.basicConfig(
+    filename='preprocessing.log',  # Arquivo de log
+    level=logging.INFO,         # Nivel de log (INFO para mensagens normais, ERROR para erros)
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
 MODALITY = 't1' #BOTE 'flair' ou 't1'
 
 # Configuração do logging
@@ -103,11 +110,11 @@ def process_and_save_image(img_path, output_dir, orient, template):
 # Início do processamento
 if __name__ == "__main__":
     # DIRETÓRIOS
-    DIR_BASE = "/mnt/c/Users/Bruno/Desktop/IANS/ADNI"
-    DIR_RAW = f"{DIR_BASE}/ADNI_3_4_RAW"
-    DIR_OUTPUT = f"{DIR_BASE}/ADNI_3_4_PROCESSED"
+    DIR_BASE = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/AIBL"
+    DIR_RAW = f"{DIR_BASE}/AIBL_raw"
+    DIR_OUTPUT = f"{DIR_BASE}/AIBL_processed"
     os.makedirs(DIR_OUTPUT, exist_ok=True)
-    DIR_MASK = "/mnt/c/Users/Bruno/Documents/Github/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
+    DIR_MASK = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/Alzheimer-CNN-Detection/pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c"
     
     template_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c.nii')
     mask_path = os.path.join(DIR_MASK, 'mni_icbm152_t1_tal_nlin_asym_09c_mask.nii')
@@ -118,29 +125,23 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logger.info(f"INICIO DO PROCESSAMENTO")
 
-    for name in os.listdir(f"{DIR_RAW}"): #itera as subpastas dentre o diretório original
-        for class_name in os.listdir(f"{DIR_RAW}/{name}"):
-            input_path = f"{DIR_RAW}/{name}/{class_name}"
-            output_path = f"{DIR_OUTPUT}/{name}/{class_name}"
-            os.makedirs(output_path, exist_ok=True)
+    # Caminhos das imagens
+    already_processed = [file for file in os.listdir(DIR_OUTPUT)] #checa o diretório de saída pra ver se alguma imagem já foi processada
+    image_paths = [os.path.join(DIR_RAW, file) for file in os.listdir(DIR_RAW) if file not in already_processed] #carrega o endereço das imagens não processadas
 
-            # Caminhos das imagens
-            already_processed = [file for file in os.listdir(output_path)] #checa o diretório de saída pra ver se alguma imagem já foi processada
-            image_paths = [os.path.join(input_path, file) for file in os.listdir(input_path) if file not in already_processed] #carrega o endereço das imagens não processadas
+    print(f"IMAGENS PROCESSADAS: {len(already_processed)}")
+    print(f"IMAGENS A SEREM PROCESSADAS: {len(image_paths)}")
 
-            print(f"IMAGENS PROCESSADAS {name}: {len(already_processed)}")
-            print(f"IMAGENS A SEREM PROCESSADAS {name}: {len(image_paths)}")
+    # Função parcial para passar parâmetros fixos
+    process_func = partial(process_and_save_image, output_dir=DIR_OUTPUT, orient='IRA', template=template)
 
-            # Função parcial para passar parâmetros fixos
-            process_func = partial(process_and_save_image, output_dir=output_path, orient='IRA', template=template)
-
-            # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
-            with ProcessPoolExecutor(max_workers=4) as executor: #max_workers define o número máximo de processos paralelos
-                # dependendo do pc, é melhor fazer um por vez, pois paralelizar pode deixar cada processo mais demorado sem hardware que aguente
-                futures = [executor.submit(process_func, img_path) for img_path in image_paths]
-                
-                for future in as_completed(futures):
-                    future.result()  # Pega o resultado para garantir que exceções sejam lançadas
+    # Processamento e salvamento de cada imagem usando ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=4) as executor: #max_workers define o número máximo de processos paralelos
+        # dependendo do pc, é melhor fazer um por vez, pois paralelizar pode deixar cada processo mais demorado sem hardware que aguente
+        futures = [executor.submit(process_func, img_path) for img_path in image_paths]
+        
+        for future in as_completed(futures):
+            future.result()  # Pega o resultado para garantir que exceções sejam lançadas
 
     # Fim do processamento
     end_time = datetime.now()
