@@ -25,6 +25,9 @@ import json
 import os
 import sys
 
+import matplotlib
+matplotlib.use("Agg")  # sem display no servidor: plt.show() do utils nao pode tentar abrir janela
+
 import numpy as np
 import nibabel as nib
 import tensorflow as tf
@@ -41,7 +44,6 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from utils.metricas_e_visualizacao import get_classification_report, plot_confusion_matrix
-from utils.processamento_dados import nifti_data_generator_3d
 
 
 def save_auc(pred, true_labels, results_dir, subset):
@@ -214,13 +216,31 @@ class SFRModel(tf.keras.Model):
         return self.model(x)
 
 
-def get_predictions_fold(images, labels, batch_size, model):
+def memmap_batch_generator(images, labels, indices, batch_size):
+    """Le cada lote direto do .npy mapeado em disco.
+
+    Nunca materializa o fold inteiro em RAM, so o lote da vez. Os indices ficam
+    em ordem crescente de proposito: leitura sequencial no arquivo mapeado e bem
+    mais rapida que acesso espalhado, e o pool ja foi embaralhado quando o cache
+    foi escrito, entao a ordem no arquivo ja e aleatoria em relacao a classe.
+    """
+    total_n = len(indices)
+    if total_n == 0:
+        raise ValueError("O generator recebeu uma lista vazia de indices!")
+
+    while True:
+        for i in range(0, total_n, batch_size):
+            batch_idx = indices[i:i + batch_size]
+            yield np.asarray(images[batch_idx]), np.asarray(labels[batch_idx])
+
+
+def get_predictions_memmap(images, labels, indices, batch_size, model):
     pred = []
-    for i in range(0, len(images), batch_size):
-        final = min(i + batch_size, len(images))
-        pred.append(model.predict(images[i:final], verbose=0))
+    for i in range(0, len(indices), batch_size):
+        batch_idx = indices[i:i + batch_size]
+        pred.append(model.predict(np.asarray(images[batch_idx]), verbose=0))
     pred = np.concatenate(pred)
-    true_labels = np.argmax(labels, axis=1)
+    true_labels = np.argmax(np.asarray(labels[indices]), axis=1)
     pred_labels = np.argmax(pred, axis=1)
     return pred_labels, true_labels, pred
 
@@ -255,16 +275,15 @@ def main():
     splits = list(skf.split(kfold_images, kfold_y))
     train_idx, val_idx = splits[fold_idx - 1]
 
-    mask_crop = build_mask_crop(args.mask_path)
-
-    fold_val_images = np.array(kfold_images[val_idx])
-    fold_val_labels = np.array(kfold_labels[val_idx])
-
-    fold_train_gen = nifti_data_generator_3d(np.array(kfold_images[train_idx]), np.array(kfold_labels[train_idx]), args.batch_size)
-    fold_val_gen = nifti_data_generator_3d(fold_val_images, fold_val_labels, args.batch_size)
-
     K.clear_session()
     gc.collect()
+
+    mask_crop = build_mask_crop(args.mask_path)
+
+    # Lotes lidos sob demanda do arquivo mapeado -- nenhum dos dois folds e
+    # materializado inteiro em RAM
+    fold_train_gen = memmap_batch_generator(kfold_images, kfold_labels, train_idx, args.batch_size)
+    fold_val_gen = memmap_batch_generator(kfold_images, kfold_labels, val_idx, args.batch_size)
 
     fold_base_model = create_model_3d(sample_shape, len(args.class_names))
     fold_model = SFRModel(
@@ -302,8 +321,8 @@ def main():
     with open(os.path.join(fold_dir, "history.json"), "w") as f:
         json.dump(history.history, f, indent=2)
 
-    fold_pred_labels, fold_true_labels, fold_pred = get_predictions_fold(
-        fold_val_images, fold_val_labels, args.batch_size, fold_model
+    fold_pred_labels, fold_true_labels, fold_pred = get_predictions_memmap(
+        kfold_images, kfold_labels, val_idx, args.batch_size, fold_model
     )
     get_classification_report(fold_true_labels, fold_pred_labels, fold_dir, 'val')
     plot_confusion_matrix(fold_true_labels, fold_pred_labels, fold_dir, 'val', args.class_names)

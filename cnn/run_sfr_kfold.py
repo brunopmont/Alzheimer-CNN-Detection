@@ -14,28 +14,38 @@ longo da sessao e nunca e devolvido ao SO.
 
 O PreAugmentCrossValidationDGX.py roda esse mesmo tipo de carga (dados 3D,
 K-fold, TF/Keras) como script .py puro sem esse problema -- este driver segue
-o mesmo padrao: carrega os dados uma vez, participa do loop de folds chamando
-run_fold_sfr.py como subprocesso (assim cada fold ainda ganha um processo
-isolado pro treino em si), e nao acumula nenhum estado de notebook.
+o mesmo padrao: escreve o pool train+val num .npy pre-alocado em disco (um
+volume por vez, sem nunca ter o dataset inteiro em RAM) e roda o loop de folds
+chamando run_fold_sfr.py como subprocesso, que le esse .npy mapeado por lote.
+
+Resume: passe --results-dir apontando para a pasta test_N de uma execucao
+anterior. O cache do pool e os folds ja concluidos sao reaproveitados.
 """
-import gc
+import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 
 import numpy as np
 import nibabel as nib
-from sklearn.utils import shuffle
-from sklearn.preprocessing import LabelEncoder
-from tensorflow.keras.utils import to_categorical
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ===== Caminhos: ajuste para o ambiente onde este script vai rodar =====
 dir_base = "/mnt/c/Users/Paulo Pires/Desktop/Alzheimer_cnn/ADNI/ADNI_NORMALIZED"
 train_dir = f'{dir_base}/train'
 val_dir = f'{dir_base}/validation'
-results_dir = f'{dir_base}/results/neurips_results/grad_loss_mask_pre'
-mask_nii_path = "../pre_processing/mni_icbm152_nlin_asym_09c_nifti/mni_icbm152_nlin_asym_09c/mni_icbm152_t1_tal_nlin_asym_09c_mask.nii"
+results_root = f'{dir_base}/results/neurips_results/grad_loss_mask_pre'
+
+# resolvido a partir do proprio script, nao do cwd -- assim funciona rodando de
+# qualquer diretorio, e o subprocesso recebe um caminho absoluto
+mask_nii_path = os.path.join(
+    SCRIPT_DIR, "..", "pre_processing", "mni_icbm152_nlin_asym_09c_nifti",
+    "mni_icbm152_nlin_asym_09c", "mni_icbm152_t1_tal_nlin_asym_09c_mask.nii",
+)
+mask_nii_path = os.path.abspath(mask_nii_path)
 
 class_names = ['cn', 'ad']
 n_classes = len(class_names)
@@ -45,63 +55,82 @@ FOLD_ALPHA = 0.00
 FOLD_EPOCHS = 200
 FOLD_PATIENCE = 30
 batch_size = 16
+SHUFFLE_SEED = 42
 
 
-def load_nifti_data_balanced(base_dir, class_names):
-    images, labels, paths = [], [], []
-    for label in class_names:
-        print(f"carregando diretorio {label}")
-        label_dir = os.path.join(base_dir, label)
-        count = 0
-        for fname in os.listdir(label_dir):
-            img_path = os.path.join(label_dir, fname)
-            img = nib.load(img_path).get_fdata(dtype=np.float16)
-            paths.append(img_path)
-            images.append(img)
-            labels.append(label)
-            count += 1
-        print(f"diretorio carregado {count}")
+def build_kfold_cache(base_dirs, images_path, labels_path, seed=SHUFFLE_SEED):
+    """Escreve o pool train+val direto num .npy pre-alocado em disco.
 
-    label_encoder = LabelEncoder()
-    label_encoder.classes_ = np.array(class_names)
-    labels_encoded = label_encoder.transform(labels)
-    labels_one_hot = to_categorical(labels_encoded, num_classes=len(class_names))
+    Carrega um volume por vez para dentro do memmap, entao o pico de RAM e o de
+    UM volume -- e nao o de 2x o dataset inteiro, que era o que acontecia com o
+    load_nifti_data_balanced do notebook (lista de volumes -> np.array (2a
+    copia) -> shuffle por fancy indexing (3a copia)) seguido do np.concatenate
+    de treino+validacao. O embaralhamento e feito na LISTA de arquivos, antes de
+    carregar, entao nao existe copia embaralhada do array.
+    """
+    entries = []
+    for base_dir in base_dirs:
+        for class_idx, label in enumerate(class_names):
+            label_dir = os.path.join(base_dir, label)
+            for fname in sorted(os.listdir(label_dir)):
+                entries.append((os.path.join(label_dir, fname), class_idx))
 
-    images = np.array(images).reshape((-1, *images[0].shape, 1))
-    labels_one_hot = np.array(labels_one_hot)
+    random.Random(seed).shuffle(entries)
 
-    images, labels_one_hot, paths = shuffle(images, labels_one_hot, paths, random_state=42)
-    return images, labels_one_hot, paths, label_encoder.classes_
+    total = len(entries)
+    if total == 0:
+        raise ValueError(f"Nenhum volume encontrado em {base_dirs}")
+
+    shape = nib.load(entries[0][0]).header.get_data_shape()
+    print(f"Pool k-fold: {total} volumes, shape {shape}")
+
+    images = np.lib.format.open_memmap(
+        images_path, mode='w+', dtype=np.float16, shape=(total, *shape, 1)
+    )
+    labels = np.zeros((total, n_classes), dtype=np.float16)
+
+    for i, (path, class_idx) in enumerate(entries):
+        images[i, ..., 0] = nib.load(path).get_fdata(dtype=np.float32).astype(np.float16)
+        labels[i, class_idx] = 1.0
+        if (i + 1) % 50 == 0 or (i + 1) == total:
+            print(f"  {i + 1}/{total} volumes escritos")
+
+    images.flush()
+    del images
+    np.save(labels_path, labels)
+    print(f"Cache do pool escrito em {images_path}")
 
 
 def main():
-    os.makedirs(results_dir, exist_ok=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--results-dir", default=None,
+        help="Pasta test_N de uma execucao anterior, para retomar de onde parou. "
+             "Sem isso, uma pasta nova e criada.",
+    )
+    args = parser.parse_args()
 
-    n = len(os.listdir(results_dir))
-    folder_name = f"test_{n + 1}"
-    fold_results_dir = os.path.join(results_dir, folder_name)
-    os.makedirs(fold_results_dir, exist_ok=True)
-    print(f"pasta {folder_name} criada")
+    os.makedirs(results_root, exist_ok=True)
 
-    print("Carregando treino...")
-    train_images, train_labels, train_paths, _ = load_nifti_data_balanced(train_dir, class_names)
-    print(f"N treino: {len(train_paths)}")
+    if args.results_dir:
+        run_dir = args.results_dir
+        if not os.path.isdir(run_dir):
+            raise SystemExit(f"--results-dir nao existe: {run_dir}")
+        print(f"Retomando execucao em {run_dir}")
+    else:
+        n = len(os.listdir(results_root))
+        run_dir = os.path.join(results_root, f"test_{n + 1}")
+        os.makedirs(run_dir, exist_ok=True)
+        print(f"pasta {os.path.basename(run_dir)} criada")
 
-    print("Carregando validacao...")
-    val_images, val_labels, val_paths, _ = load_nifti_data_balanced(val_dir, class_names)
-    print(f"N validation: {len(val_paths)}")
+    images_path = os.path.join(run_dir, "_kfold_images.npy")
+    labels_path = os.path.join(run_dir, "_kfold_labels.npy")
 
-    kfold_images = np.concatenate([train_images, val_images], axis=0)
-    kfold_labels = np.concatenate([train_labels, val_labels], axis=0)
-    del train_images, val_images, train_labels, val_labels
-    gc.collect()
-
-    kfold_images_path = os.path.join(fold_results_dir, "_kfold_images.npy")
-    kfold_labels_path = os.path.join(fold_results_dir, "_kfold_labels.npy")
-    np.save(kfold_images_path, kfold_images)
-    np.save(kfold_labels_path, kfold_labels)
-    del kfold_images, kfold_labels
-    gc.collect()
+    if os.path.exists(images_path) and os.path.exists(labels_path):
+        print("Cache do pool k-fold ja existe -- reaproveitando.")
+    else:
+        print("Gerando cache do pool k-fold (train + validation) em disco...")
+        build_kfold_cache([train_dir, val_dir], images_path, labels_path)
 
     fold_metrics = []
 
@@ -116,13 +145,13 @@ def main():
             f"AUC media: {np.mean(aucs):.4f} +/- {np.std(aucs):.4f}\n"
         )
         print(summary)
-        with open(os.path.join(fold_results_dir, "kfold_summary.txt"), "w") as f:
+        with open(os.path.join(run_dir, "kfold_summary.txt"), "w") as f:
             f.write(summary)
 
     for fold_idx in range(1, N_FOLDS + 1):
         print(f"\n===== FOLD {fold_idx}/{N_FOLDS} =====")
 
-        fold_dir = os.path.join(fold_results_dir, f"kfold_{fold_idx}")
+        fold_dir = os.path.join(run_dir, f"kfold_{fold_idx}")
         fold_result_path = os.path.join(fold_dir, "fold_result.json")
 
         if os.path.exists(fold_result_path):
@@ -133,12 +162,12 @@ def main():
             continue
 
         cmd = [
-            sys.executable, os.path.join(os.path.dirname(__file__), "run_fold_sfr.py"),
+            sys.executable, os.path.join(SCRIPT_DIR, "run_fold_sfr.py"),
             "--fold-idx", str(fold_idx),
             "--n-folds", str(N_FOLDS),
-            "--results-dir", fold_results_dir,
-            "--kfold-images", kfold_images_path,
-            "--kfold-labels", kfold_labels_path,
+            "--results-dir", run_dir,
+            "--kfold-images", images_path,
+            "--kfold-labels", labels_path,
             "--mask-path", mask_nii_path,
             "--alpha", str(FOLD_ALPHA),
             "--epochs", str(FOLD_EPOCHS),
@@ -157,6 +186,7 @@ def main():
 
     print("\n===== K-Fold concluido =====")
     write_kfold_summary()
+    print(f"\nO cache do pool ({images_path}) pode ser apagado se nao for retomar esta execucao.")
 
 
 if __name__ == "__main__":
